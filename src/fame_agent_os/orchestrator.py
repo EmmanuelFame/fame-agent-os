@@ -7,6 +7,7 @@ from .telemetry import append, context_metrics, context_warnings
 from .errors import HumanGate
 from .verifier import verify
 from .config import write_json
+from .scopes import resolve as resolve_scopes
 
 class Orchestrator:
  def __init__(self,root:Path,config:dict,runner): self.root=root; self.config=config; self.runner=runner; self.resolver=ModelResolver(config)
@@ -31,10 +32,12 @@ class Orchestrator:
    body=f"# {phase.title()} result\n\nCodex phase completed successfully.\n"
    if changed: body+="\nChanged files for verifier (bounded):\n"+"\n".join(f"- `{path}`" for path in changed)+"\n"
    (self.root/".fame"/"tasks"/task["id"]/artifact).write_text(body)
-  commands=self.config.get("verification",{}).get("commands",[])
-  deterministic=verify(self.root,commands)
+  import subprocess
+  changed=[line[3:] for line in subprocess.run(["git","status","--porcelain"],cwd=self.root,text=True,capture_output=True,check=False).stdout.splitlines() if not line[3:].startswith(".fame/")]
+  scope=resolve_scopes(self.config,goal,changed)
+  deterministic=verify(self.root,scope["commands"])
   task_path=self.root/".fame"/"tasks"/task["id"] / "TASK.json"
-  persisted=__import__("json").loads(task_path.read_text()); persisted["verification"]={"success":deterministic.success,"results":deterministic.results}; write_json(task_path,persisted)
+  persisted=__import__("json").loads(task_path.read_text()); persisted["scope"]=scope; persisted["verification"]={"success":deterministic.success,"results":deterministic.results}; write_json(task_path,persisted)
   if not deterministic.success:
    transition(self.root,task["id"],"FAILED","deterministic-verification"); return task
   transition(self.root,task["id"],"DONE","complete")

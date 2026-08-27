@@ -2,6 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib, json, os, shutil, subprocess
 from datetime import datetime, timezone
+from .verifier import run_commands
 
 def branch_for(task_id: str) -> str: return f"fame/{task_id.lower()}"
 def destination_for(root: Path, task_id: str) -> Path: return root.parent/".fame-worktrees"/root.name/task_id
@@ -61,3 +62,6 @@ def create(root:Path, task_id:str) -> tuple[Path,str,bool]:
     if source.exists(): shutil.copytree(source,destination/".fame",dirs_exist_ok=True,ignore=shutil.ignore_patterns("logs","cache","tmp"))
     record(root,task_id,status="PROVISIONED",branch=branch,worktree_path=str(destination),verification_state="NOT_RUN",recovery={"available":True,"action":"resume-or-review persistent worktree"})
     return destination,branch,False
+def prepare_environment(worktree: Path, commands: list[str]):
+    """Run only explicit project-owned setup in the isolated task worktree."""
+    return run_commands(worktree, commands)

@@ -16,6 +16,8 @@ The skill routes before broad exploration. The MCP server exposes deterministic 
 
 For local VS Code, initialize and install from the open repository. For VS Code Remote SSH, install Fame on the VPS, `cd` to the remote project, run `fame init --production`, configure `verification.commands`, then run `fame codex install --project` and reload the remote extension. A missing Codex CLI does not invalidate a healthy extension/MCP setup; `fame doctor` reports the two capabilities separately. See [Codex Extension Native mode](docs/CODEX.md).
 
+Large repositories still use one Fame root: configure named project scopes for deterministic path ownership, scoped checks, and isolated worktree preparation. Legacy repository-wide verification remains supported. See [Monorepo scopes](docs/MONOREPOS.md).
+
 Useful commands: `fame doctor`, `fame models`, `fame route "Change button label"`, `fame task "Add a CRUD endpoint" --dry-run`, `fame status`, `fame self-check`, and `fame usage`.
 
 ## Context efficiency

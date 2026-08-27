@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 @dataclass
 class Verification: success:bool; results:list[dict]
-def verify(root:Path, commands:list[str]) -> Verification:
-    if not commands: return Verification(False,[{"command":[],"returncode":None,"stdout":"","stderr":"no deterministic verification commands configured"}])
+def run_commands(root:Path, commands:list[str]) -> Verification:
     results=[]
     for command in commands:
         # Commands are project-owned configuration; no shell is used: split only simple argv strings.
@@ -13,3 +12,6 @@ def verify(root:Path, commands:list[str]) -> Verification:
         args=shlex.split(command); p=subprocess.run(args,cwd=root,text=True,capture_output=True,check=False)
         results.append({"command":args,"returncode":p.returncode,"stdout":p.stdout[-4000:],"stderr":p.stderr[-4000:]})
     return Verification(all(x["returncode"]==0 for x in results),results)
+def verify(root:Path, commands:list[str]) -> Verification:
+    if not commands: return Verification(False,[{"command":[],"returncode":None,"stdout":"","stderr":"no deterministic verification commands configured"}])
+    return run_commands(root,commands)

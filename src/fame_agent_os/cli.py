@@ -14,7 +14,8 @@ from .self_check import check as self_check
 from .state import fame_dir
 from .telemetry import aggregate, benchmark
 from .verifier import verify
-from .worktree import create as create_worktree, next_task_id as next_worktree_task_id, preflight as production_preflight, record as record_production, registry as production_registry
+from .scopes import resolve as resolve_scopes
+from .worktree import create as create_worktree, next_task_id as next_worktree_task_id, preflight as production_preflight, prepare_environment, record as record_production, registry as production_registry
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps(value,indent=2)); return
@@ -29,7 +30,7 @@ def parser():
  r=sub.add_parser("route");r.add_argument("task"); common(r);r.add_argument("--json",action="store_true")
  for name in ("task","plan","debug"):
   q=sub.add_parser(name);q.add_argument("task");common(q);q.add_argument("--worktree",action="store_true")
- v=sub.add_parser("verify");v.add_argument("--json",action="store_true")
+ v=sub.add_parser("verify");v.add_argument("--json",action="store_true");v.add_argument("--task",default="");v.add_argument("--path",dest="paths",action="append",default=[])
  s=sub.add_parser("self-check", help="validate Fame project state without invoking Codex");s.add_argument("--json",action="store_true")
  sub.add_parser("status")
  u=sub.add_parser("usage");u.add_argument("--task");u.add_argument("--json",action="store_true")
@@ -56,7 +57,7 @@ def main(argv=None):
   git=shutil.which("git"); codex=runner.available(); catalog,note=runner.models() if codex else ([],"Codex absent")
   production=project_config(root).get("production",False); commands=project_config(root).get("verification",{}).get("commands",[])
   report=mcp_doctor(root); report.update({"python":sys.version.split()[0],"git":bool(git),"git_repository":(root/".git").exists(),"codex":codex,"model_catalog":note,"graph":graph.status(root)})
-  emit(report);return 0 if not production or (bool(commands) and report["production"]["live_checkout_clean"]) else 2
+  emit(report);return 0 if not production or (report["production"]["deterministic_verification_configured"] and report["production"]["live_checkout_clean"]) else 2
  if args.command=="graph":
   if args.graph_command=="status":emit(graph.status(root));return 0
   ok,msg=graph.update(root);emit({"success":ok,"message":msg});return 0 if ok else 1
@@ -70,8 +71,9 @@ def main(argv=None):
   production=project_config(root).get("production")
   if production and not args.worktree:
    print("Production project guard: use --worktree for modifying task.",file=sys.stderr);return 2
-  if production and not config.get("verification",{}).get("commands",[]):
-   print("Production project unsafe: configure deterministic verification commands before running a task.",file=sys.stderr);return 2
+  scope=resolve_scopes(config,args.task)
+  if production and not scope["commands"]:
+   print("Production project unsafe: configure deterministic verification commands for the selected scope.",file=sys.stderr);return 2
   if args.worktree:
    try:
     # All guards run before choosing an ID or creating any persistent task resource.
@@ -84,16 +86,20 @@ def main(argv=None):
      task_file=path/".fame"/"tasks"/task_id/"TASK.json"; status=json.loads(task_file.read_text()).get("status","INTERRUPTED") if task_file.exists() else "INTERRUPTED"
      record_production(root,task_id,status=status,branch=branch,worktree_path=str(path),recovery={"available":True,"action":"resume-or-review persistent worktree"})
      emit({"task_id":task_id,"status":status,"worktree":str(path),"branch":branch,"changed_files":{"project":[],"fame_metadata":[]},"verification_result":None,"recovery":production_registry(root)["tasks"][task_id]["recovery"],"review_instructions":"Review or resume this persistent worktree manually; it was not deleted, merged, deployed, or restarted."}); return 2
+    preparation=prepare_environment(path,scope["preparation"])
+    record_production(root,task_id,status="PREPARED" if preparation.success else "PREPARATION_FAILED",branch=branch,worktree_path=str(path),preparation={"success":preparation.success,"results":preparation.results},recovery={"available":True,"action":"review or resume persistent worktree"})
+    if not preparation.success:
+     emit({"task_id":task_id,"status":"PREPARATION_FAILED","worktree":str(path),"branch":branch,"scopes":scope["scopes"],"preparation":{"success":False,"results":preparation.results},"recoverable":True}); return 2
     worktree_config=merged_config(path); result=Orchestrator(path,worktree_config,runner).task(args.task,route,budget,args.max_tier,task_id=task_id)
     changed=[line[3:] for line in subprocess.run(["git","status","--porcelain"],cwd=path,text=True,capture_output=True,check=False).stdout.splitlines()]
     grouped={"project":[p for p in changed if not p.startswith(".fame/")],"fame_metadata":[p for p in changed if p.startswith(".fame/")]}
     record_production(root,task_id,status=result.get("status"),branch=branch,worktree_path=str(path),verification_state="PASSED" if result.get("verification",{}).get("success") else "FAILED" if result.get("verification") else "NOT_RUN",verification=result.get("verification"),recovery={"available":True,"action":"review persistent worktree"})
     emit({"task_id":result.get("id"),"status":result.get("status"),"worktree":str(path),"branch":branch,"changed_files":grouped,"verification_result":result.get("verification"),"recovery":production_registry(root)["tasks"][task_id]["recovery"],"review_instructions":"Review changes in the persistent worktree, then merge or deploy manually. Fame never merges, deploys, restarts services, modifies the live branch, or deletes this worktree."}); return 0 if result.get("status")=="DONE" else 1
    except RuntimeError as e: print(str(e),file=sys.stderr);return 2
-  try: result=Orchestrator(root,config,runner).task(args.task,route,budget,args.max_tier);emit({"task_id":result.get("id"),"status":result.get("status","started")});return 0
+  try: result=Orchestrator(root,config,runner).task(args.task,route,budget,args.max_tier);emit({"task_id":result.get("id"),"status":result.get("status","started"),"scopes":result.get("scope",{}).get("scopes",[])});return 0
   except Exception as e: print(str(e),file=sys.stderr);return 2
  if args.command=="verify":
-  result=verify(root,project_config(root).get("verification",{}).get("commands",[])); emit({"success":result.success,"results":result.results},args.json);return 0 if result.success else 1
+  scope=resolve_scopes(project_config(root),args.task,args.paths); result=verify(root,scope["commands"]); emit({"success":result.success,"results":result.results,"scopes":scope["scopes"],"scope_ambiguity":scope["ambiguous"],"candidate_scopes":scope["candidates"],"commands_selected":scope["commands"],"commands_skipped":scope["skipped_commands"],"optional_checks":scope["optional_checks"]},args.json);return 0 if result.success else 1
  if args.command=="self-check":
   result=self_check(root); emit({"success":result.success,"errors":result.errors},args.json);return 0 if result.success else 1
  if args.command=="status":

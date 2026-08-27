@@ -1,0 +1,74 @@
+{
+  "id": "FAME-0006",
+  "goal": "Extend Fame Agent OS v1.3.0 for deterministic multi-project/monorepo scope profiles, scoped verification, safe production-worktree preparation, MCP/CLI/doctor integration, deterministic tests, and documentation without redesigning existing architecture.",
+  "acceptance_criteria": [
+    "Implementation matches task goal",
+    "Configured verification succeeds"
+  ],
+  "class": "F2",
+  "risk_indicators": [
+    "architectural or broad-impact wording"
+  ],
+  "route": {
+    "role": "builder",
+    "effort": "low",
+    "phases": [
+      "builder",
+      "verifier"
+    ]
+  },
+  "budget_mode": "balanced",
+  "max_tier": null,
+  "status": "DONE",
+  "timestamps": {
+    "created": "2026-08-27T16:35:23.589491+00:00",
+    "done": "2026-08-27T16:42:07.185979+00:00"
+  },
+  "graph_context": {},
+  "scope": {
+    "scopes": [],
+    "candidates": [],
+    "ambiguous": false,
+    "commands": [
+      "env PYTHONPATH=src python3 -m unittest discover -s tests -v",
+      "python3 -m compileall -q src"
+    ],
+    "skipped_commands": [],
+    "optional_checks": [],
+    "preparation": [],
+    "environment_notes": []
+  },
+  "verification": {
+    "success": true,
+    "results": [
+      {
+        "command": [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-v"
+        ],
+        "returncode": 0,
+        "stdout": "{\n  \"class\": \"F1\",\n  \"role\": \"operator\",\n  \"reasoning\": \"low\",\n  \"risk\": \"low\",\n  \"reason\": [\n    \"established mechanical change\",\n    \"no schema or security impact\",\n    \"low expected blast radius\"\n  ],\n  \"blocked\": false,\n  \"model\": \"gpt-5.6-luna\",\n  \"phases\": [\n    \"operator\",\n    \"verifier\"\n  ]\n}\n{\n  \"class\": \"F1\",\n  \"role\": \"operator\",\n  \"reasoning\": \"low\",\n  \"risk\": \"low\",\n  \"reason\": [\n    \"established mechanical change\",\n    \"no schema or security impact\",\n    \"low expected blast radius\"\n  ],\n  \"blocked\": false,\n  \"model\": \"gpt-5.6-luna\",\n  \"phases\": [\n    \"operator\",\n    \"verifier\"\n  ],\n  \"dry_run\": true,\n  \"codex_calls\": 0\n}\n{\n  \"fame_version\": \"1.3.0\",\n  \"project_initialized\": true,\n  \"schema_version\": \"1\",\n  \"git\": true,\n  \"production\": {\n    \"enabled\": true,\n    \"deterministic_verification_configured\": false,\n    \"live_checkout_clean\": false,\n    \"safe\": false\n  },\n  \"codex_cli_backend\": true,\n  \"extension_integration\": {\n    \"project_config\": \"/tmp/tmpozz549kz/.codex/config.toml\",\n    \"config_valid\": false,\n    \"config_error\": null,\n    \"mcp_configured\": false,\n    \"mcp_launchable\": true,\n    \"skill_installed\": false,\n    \"agents\": {\n      \"fame-operator.toml\": false,\n      \"fame-builder-low.toml\": false,\n      \"fame-builder-medium.toml\": false,\n      \"fame-architect.toml\": false,\n      \"fame-verifier.toml\": false\n    },\n    \"agents_complete\": false,\n    \"healthy\": false\n  },\n  \"graphify\": {\n    \"available\": true,\n    \"graph_exists\": false\n  },\n  \"scopes\": {\n    \"configured\": [],\n    \"legacy_repository_verification\": true,\n    \"problems\": []\n  },\n  \"safety_problems\": [\n    \"production verification commands are not configured\"\n  ],\n  \"python\": \"3.12.3\",\n  \"git_repository\": true,\n  \"codex\": true,\n  \"model_catalog\": \"catalog detected\",\n  \"graph\": {\n    \"available\": true,\n    \"graph_exists\": false,\n    \"binary\": \"graphify\"\n  }\n}\n{\n  \"task_id\": \"FAME-0001\",\n  \"status\": \"DONE\",\n  \"worktree\": \"/tmp/.fame-worktrees/tmpxvjp2p4h/FAME-0001\",\n  \"branch\": \"fame/fame-0001\",\n  \"changed_files\": {\n    \"project\": [\n      \"builder-change.txt\",\n      \"prepared\"\n    ],\n    \"fame_metadata\": [\n      \".fame/state/CURRENT.json\",\n      \".fame/tasks/\"\n    ]\n  },\n  \"verification_result\": {\n    \"success\": true,\n    \"results\": [\n      {\n        \"command\": [\n          \"true\"\n        ],\n        \"returncode\": 0,\n        \"stdout\": \"\",\n        \"stderr\": \"\"\n      }\n    ]\n  },\n  \"recovery\": {\n    \"available\": true,\n    \"action\": \"review persistent worktree\"\n  },\n  \"review_instructions\": \"Review changes in the persistent worktree, then merge or deploy manually. Fame never merges, deploys, restarts services, modifies the live branch, or deletes this worktree.\"\n}\n{\n  \"task_id\": \"FAME-0001\",\n  \"status\": \"INTERRUPTED\",\n  \"worktree\": \"/tmp/.fame-worktrees/tmpxvjp2p4h/FAME-0001\",\n  \"branch\": \"fame/fame-0001\",\n  \"changed_files\": {\n    \"project\": [],\n    \"fame_metadata\": []\n  },\n  \"verification_result\": null,\n  \"recovery\": {\n    \"available\": true,\n    \"action\": \"resume-or-review persistent worktree\"\n  },\n  \"review_instructions\": \"Review or resume this persistent worktree manually; it was not deleted, merged, deployed, or restarted.\"\n}\n{\n  \"success\": true,\n  \"errors\": []\n}\n{\n  \"success\": false,\n  \"errors\": [\n    {\n      \"code\": \"current_task_missing\",\n      \"path\": \"/tmp/tmp0vpyfffv/.fame/state/CURRENT.json\",\n      \"message\": \"no valid task artifact for 'FAME-9999'\"\n    }\n  ]\n}\n",
+        "stderr": ". Production project unsafe: configure deterministic verification commands for the selected scope.\nRequired route is blocked by --max-tier\nok\ntest_production_status_is_visible_without_dirtying_live_checkout (test_fame.OtherTests.test_production_status_is_visible_without_dirtying_live_checkout) ... ok\ntest_production_worktree_runs_task_without_changing_live_checkout (test_fame.OtherTests.test_production_worktree_runs_task_without_changing_live_checkout) ... ok\ntest_resolver_override_and_high_only_architect (test_fame.OtherTests.test_resolver_override_and_high_only_architect) ... ok\ntest_telemetry (test_fame.OtherTests.test_telemetry) ... ok\ntest_budget_and_max (test_fame.RoutingTests.test_budget_and_max) ... ok\ntest_context_efficiency_diagnosis_is_f3 (test_fame.RoutingTests.test_context_efficiency_diagnosis_is_f3) ... ok\ntest_established_risk_pattern_lowers (test_fame.RoutingTests.test_established_risk_pattern_lowers) ... ok\ntest_high_engineering_score_without_architecture_stays_builder (test_fame.RoutingTests.test_high_engineering_score_without_architecture_stays_builder) ... ok\ntest_routes_examples (test_fame.RoutingTests.test_routes_examples) ... ok\ntest_catalog_mock (test_fame.RunnerTests.test_catalog_mock) ... ok\ntest_command_security (test_fame.RunnerTests.test_command_security) ... ok\ntest_jsonl_unknown_tolerated (test_fame.RunnerTests.test_jsonl_unknown_tolerated) ... ok\ntest_missing_codex (test_fame.RunnerTests.test_missing_codex) ... ok\ntest_ambiguous_task_returns_candidates (test_fame.ScopeTests.test_ambiguous_task_returns_candidates) ... ok\ntest_frontend_and_backend_are_scoped (test_fame.ScopeTests.test_frontend_and_backend_are_scoped) ... ok\ntest_legacy_single_project_config_still_works (test_fame.ScopeTests.test_legacy_single_project_config_still_works) ... ok\ntest_missing_dependencies_do_not_invent_preparation (test_fame.ScopeTests.test_missing_dependencies_do_not_invent_preparation) ... ok\ntest_multi_scope_deduplicates_and_orders_commands (test_fame.ScopeTests.test_multi_scope_deduplicates_and_orders_commands) ... ok\ntest_optional_check_requires_explicit_policy_or_relevant_path (test_fame.ScopeTests.test_optional_check_requires_explicit_policy_or_relevant_path) ... ok\ntest_preparation_only_runs_in_the_given_worktree_and_failure_is_reported (test_fame.ScopeTests.test_preparation_only_runs_in_the_given_worktree_and_failure_is_reported) ... ok\ntest_init_idempotent_and_preserves_agents (test_fame.StateTests.test_init_idempotent_and_preserves_agents) ... ok\ntest_self_check_accepts_consistent_state (test_fame.StateTests.test_self_check_accepts_consistent_state) ... ok\ntest_self_check_reports_current_task_mismatch (test_fame.StateTests.test_self_check_reports_current_task_mismatch) ... ok\ntest_task_transitions (test_fame.StateTests.test_task_transitions) ... ok\ntest_blocked_mcp_prepare_creates_no_task (test_fame.V13IntegrationTests.test_blocked_mcp_prepare_creates_no_task) ... ok\ntest_codex_installer_is_idempotent_and_preserves_config (test_fame.V13IntegrationTests.test_codex_installer_is_idempotent_and_preserves_config) ... ok\ntest_mcp_finish_runs_deterministic_verification (test_fame.V13IntegrationTests.test_mcp_finish_runs_deterministic_verification) ... ok\ntest_mcp_initialize_list_route_and_malformed_request (test_fame.V13IntegrationTests.test_mcp_initialize_list_route_and_malformed_request) ... Fame MCP server ready\nok\ntest_mcp_prepare_uses_local_task_sequence_outside_production (test_fame.V13IntegrationTests.test_mcp_prepare_uses_local_task_sequence_outside_production) ... ok\ntest_mcp_reports_scopes_concisely (test_fame.V13IntegrationTests.test_mcp_reports_scopes_concisely) ... ok\ntest_prohibition_does_not_trigger_risk_route (test_fame.V13IntegrationTests.test_prohibition_does_not_trigger_risk_route) ... ok\ntest_package_version_matches_pyproject (test_fame.VersionTests.test_package_version_matches_pyproject) ... ok\n\n----------------------------------------------------------------------\nRan 41 tests in 4.460s\n\nOK\n"
+      },
+      {
+        "command": [
+          "python3",
+          "-m",
+          "compileall",
+          "-q",
+          "src"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    ]
+  }
+}

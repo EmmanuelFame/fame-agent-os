@@ -18,6 +18,8 @@ from fame_agent_os.orchestrator import Orchestrator
 from fame_agent_os.codex import CodexResult
 from fame_agent_os.mcp import serve, call, TOOLS
 from fame_agent_os.installer import codex_install, codex_status
+from fame_agent_os.scopes import resolve as resolve_scopes
+from fame_agent_os.worktree import prepare_environment
 
 
 class VersionTests(unittest.TestCase):
@@ -57,6 +59,40 @@ class V13IntegrationTests(unittest.TestCase):
   route=Router().route("Change button label"); task=create_task(self.root,"Change button label",route,"balanced",None)
   result=call(self.root,"fame_finish_task",{"task_id":task["id"]})
   self.assertTrue(result["success"]); self.assertEqual(result["status"],"DONE")
+ def test_mcp_reports_scopes_concisely(self):
+  config=json.loads((self.root/".fame/config.json").read_text()); config["scopes"]=[{"name":"frontend","paths":["web/**"],"verification":{"required":["true"]}}]; (self.root/".fame/config.json").write_text(json.dumps(config))
+  result=call(self.root,"fame_prepare_task",{"task":"Update frontend component"})
+  self.assertEqual(result["scopes"],["frontend"]); self.assertEqual(result["verification_commands"],["true"]); self.assertFalse(result["scope_ambiguity"])
+
+class ScopeTests(unittest.TestCase):
+ def config(self):
+  return {"verification":{"commands":["legacy"]},"scopes":[
+   {"name":"frontend","paths":["web/**"],"priority":10,"verification":{"required":["frontend-test","shared"],"optional":["frontend-build"],"optional_when_paths":["web/package.json"]}},
+   {"name":"backend","paths":["api/**"],"verification":{"required":["backend-test","shared"]},"preparation":{"commands":["true"]},"production_sensitive":True}]}
+ def test_legacy_single_project_config_still_works(self):
+  result=resolve_scopes({"verification":{"commands":["legacy-test"]}})
+  self.assertEqual(result["commands"],["legacy-test"]); self.assertFalse(result["ambiguous"])
+ def test_frontend_and_backend_are_scoped(self):
+  self.assertEqual(resolve_scopes(self.config(),"fix web button")["commands"],["frontend-test","shared"])
+  self.assertEqual(resolve_scopes(self.config(),"fix api handler")["commands"],["backend-test","shared"])
+ def test_multi_scope_deduplicates_and_orders_commands(self):
+  result=resolve_scopes(self.config(),"change web and api",["web/a.ts","api/a.py"])
+  self.assertEqual(result["scopes"],["frontend","backend"]); self.assertEqual(result["commands"],["frontend-test","shared","backend-test"])
+ def test_ambiguous_task_returns_candidates(self):
+  result=resolve_scopes(self.config(),"Update shared release notes")
+  self.assertTrue(result["ambiguous"]); self.assertEqual(result["candidates"],["frontend","backend"]); self.assertEqual(result["commands"],[])
+ def test_optional_check_requires_explicit_policy_or_relevant_path(self):
+  self.assertEqual(resolve_scopes(self.config(),"fix web button")["optional_checks"],["frontend-build"])
+  self.assertIn("frontend-build",resolve_scopes(self.config(),"fix web manifest",["web/package.json"])["commands"])
+ def test_missing_dependencies_do_not_invent_preparation(self):
+  result=resolve_scopes(self.config(),"fix web button")
+  self.assertEqual(result["preparation"],[])
+ def test_preparation_only_runs_in_the_given_worktree_and_failure_is_reported(self):
+  with tempfile.TemporaryDirectory() as d:
+   live=Path(d)/"live"; worktree=Path(d)/"worktree"; live.mkdir(); worktree.mkdir()
+   prepared=prepare_environment(worktree,["python3 -c \"from pathlib import Path; Path('prepared').write_text('ok')\""])
+   failed=prepare_environment(worktree,["false"])
+   self.assertTrue(prepared.success); self.assertTrue((worktree/"prepared").exists()); self.assertFalse((live/"prepared").exists()); self.assertFalse(failed.success)
 
 class RoutingTests(unittest.TestCase):
  def test_routes_examples(self):
@@ -161,10 +197,10 @@ class OtherTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d, patch.dict("os.environ",{"XDG_STATE_HOME":str(Path(d).parent/(Path(d).name+"-machine-state"))}), patch("fame_agent_os.cli.project_root",return_value=Path(d)), patch("fame_agent_os.cli.CodexRunner",return_value=FakeRunner()):
    root=Path(d); subprocess.run(["git","init"],cwd=root,check=True,capture_output=True); subprocess.run(["git","config","user.email","test@example.com"],cwd=root,check=True); subprocess.run(["git","config","user.name","Test"],cwd=root,check=True)
    (root/"README").write_text("base"); subprocess.run(["git","add","README"],cwd=root,check=True); subprocess.run(["git","commit","-m","base"],cwd=root,check=True,capture_output=True)
-   initialize(root,True); config=json.loads((root/".fame/config.json").read_text()); config["verification"]["commands"]=["true"]; (root/".fame/config.json").write_text(json.dumps(config)); subprocess.run(["git","add","."],cwd=root,check=True); subprocess.run(["git","commit","-m","initialize fame"],cwd=root,check=True,capture_output=True)
-   self.assertEqual(main(["task","Change button label","--worktree"]),0)
-   worktree=root.parent/".fame-worktrees"/root.name/"FAME-0001"; self.assertTrue(worktree.exists()); self.assertTrue((worktree/"builder-change.txt").exists()); self.assertFalse((root/"builder-change.txt").exists()); self.assertEqual(subprocess.run(["git","branch","--show-current"],cwd=root,text=True,capture_output=True,check=True).stdout.strip(),"master")
-   task_path=worktree/".fame/tasks/FAME-0001/TASK.json"; task=json.loads(task_path.read_text()); task["status"]="INTERRUPTED"; task_path.write_text(json.dumps(task)); self.assertEqual(main(["task","Change button label","--worktree"]),2); self.assertFalse((worktree.parent/"FAME-0002").exists())
+   initialize(root,True); config=json.loads((root/".fame/config.json").read_text()); config["verification"]["commands"]=["true"]; config["scopes"]=[{"name":"api","paths":["api/**"],"verification":{"required":["true"]},"preparation":{"commands":["python3 -c \"from pathlib import Path; Path('prepared').write_text('ok')\""]}}]; (root/".fame/config.json").write_text(json.dumps(config)); subprocess.run(["git","add","."],cwd=root,check=True); subprocess.run(["git","commit","-m","initialize fame"],cwd=root,check=True,capture_output=True)
+   self.assertEqual(main(["task","Change api button label","--worktree"]),0)
+   worktree=root.parent/".fame-worktrees"/root.name/"FAME-0001"; self.assertTrue(worktree.exists()); self.assertTrue((worktree/"prepared").exists()); self.assertFalse((root/"prepared").exists()); self.assertTrue((worktree/"builder-change.txt").exists()); self.assertFalse((root/"builder-change.txt").exists()); self.assertEqual(subprocess.run(["git","branch","--show-current"],cwd=root,text=True,capture_output=True,check=True).stdout.strip(),"master")
+   task_path=worktree/".fame/tasks/FAME-0001/TASK.json"; task=json.loads(task_path.read_text()); task["status"]="INTERRUPTED"; task_path.write_text(json.dumps(task)); self.assertEqual(main(["task","Change api button label","--worktree"]),2); self.assertFalse((worktree.parent/"FAME-0002").exists())
  def test_production_preflight_rejections_create_no_worktree(self):
   with tempfile.TemporaryDirectory() as d, patch.dict("os.environ",{"XDG_STATE_HOME":str(Path(d).parent/(Path(d).name+"-machine-state"))}), patch("fame_agent_os.cli.project_root",return_value=Path(d)):
    root=Path(d); subprocess.run(["git","init"],cwd=root,check=True,capture_output=True); initialize(root,True)
