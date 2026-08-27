@@ -1,0 +1,28 @@
+{
+  "id": "FAME-0003",
+  "goal": "Add a deterministic state-version command that prints the current Fame project schema version without invoking an LLM, including automated tests and README documentation.",
+  "acceptance_criteria": [
+    "Implementation matches task goal",
+    "Configured verification succeeds"
+  ],
+  "class": "F2",
+  "risk_indicators": [
+    "normal implementation work"
+  ],
+  "route": {
+    "role": "builder",
+    "effort": "low",
+    "phases": [
+      "builder",
+      "verifier"
+    ]
+  },
+  "budget_mode": "balanced",
+  "max_tier": "builder",
+  "status": "DONE",
+  "timestamps": {
+    "created": "2026-08-27T13:25:44.851192+00:00",
+    "done": "2026-08-27T13:26:54.797424+00:00"
+  },
+  "graph_context": {}
+}

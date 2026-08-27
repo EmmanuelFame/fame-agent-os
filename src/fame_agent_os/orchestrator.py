@@ -34,4 +34,7 @@ class Orchestrator:
   deterministic=verify(self.root,commands)
   if not deterministic.success:
    transition(self.root,task["id"],"FAILED","deterministic-verification"); return task
-  transition(self.root,task["id"],"DONE","complete"); return task
+  transition(self.root,task["id"],"DONE","complete")
+  return __import__("json").loads(
+   (self.root/".fame"/"tasks"/task["id"]/"TASK.json").read_text()
+  )

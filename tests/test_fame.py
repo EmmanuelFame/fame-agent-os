@@ -108,6 +108,6 @@ class OtherTests(unittest.TestCase):
    def run(self,prompt,spec,write,cwd): self.calls.append((spec.model,write,prompt));return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
   with tempfile.TemporaryDirectory() as d:
    root=Path(d);(root/".git").mkdir();initialize(root);runner=FakeRunner();task=Orchestrator(root,{"models":{},"verification":{"commands":[]}},runner).task("Redesign vendor settlement and ledger semantics",Router().route("Redesign vendor settlement and ledger semantics"),"balanced",None)
-   self.assertEqual(task["id"],"FAME-0001");self.assertEqual(len(runner.calls),3);self.assertFalse(runner.calls[0][1]);self.assertTrue(runner.calls[1][1]);self.assertTrue((root/".fame/tasks/FAME-0001/PLAN.md").exists());self.assertTrue((root/".fame/tasks/FAME-0001/VERIFY.md").exists())
+   self.assertEqual(task["id"],"FAME-0001");self.assertEqual(task["status"],"DONE");self.assertEqual(len(runner.calls),3);self.assertFalse(runner.calls[0][1]);self.assertTrue(runner.calls[1][1]);self.assertTrue((root/".fame/tasks/FAME-0001/PLAN.md").exists());self.assertTrue((root/".fame/tasks/FAME-0001/VERIFY.md").exists())
    rows=[json.loads(line) for line in (root/".fame/logs/runs.jsonl").read_text().splitlines()]
    self.assertTrue(all("context_diagnostics" in row and "fresh_input_tokens" in row for row in rows))
