@@ -1,7 +1,8 @@
 from __future__ import annotations
-import json, subprocess, tempfile, unittest
+import json, subprocess, tempfile, unittest, tomllib
 from pathlib import Path
 from unittest.mock import patch
+from fame_agent_os import __version__
 from fame_agent_os.router import Router
 from fame_agent_os.models import ModelResolver, Role, ModelSpec
 from fame_agent_os.installer import initialize, BEGIN, END
@@ -15,6 +16,13 @@ from fame_agent_os.escalation import EscalationGovernor
 from fame_agent_os.cli import main
 from fame_agent_os.orchestrator import Orchestrator
 from fame_agent_os.codex import CodexResult
+
+
+class VersionTests(unittest.TestCase):
+ def test_package_version_matches_pyproject(self):
+  root = Path(__file__).resolve().parents[1]
+  data = tomllib.loads((root/"pyproject.toml").read_text())
+  self.assertEqual(__version__, data["project"]["version"])
 
 class RoutingTests(unittest.TestCase):
  def test_routes_examples(self):
