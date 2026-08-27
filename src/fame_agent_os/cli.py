@@ -5,7 +5,8 @@ from . import __version__
 from .codex import CodexRunner
 from .config import project_root, merged_config, project_config
 from .graph import GraphAdapter
-from .installer import initialize
+from .installer import initialize, codex_install, codex_status
+from .mcp import serve as serve_mcp, doctor as mcp_doctor
 from .models import ModelResolver, Role
 from .orchestrator import Orchestrator
 from .router import Router
@@ -34,16 +35,28 @@ def parser():
  u=sub.add_parser("usage");u.add_argument("--task");u.add_argument("--json",action="store_true")
  b=sub.add_parser("benchmark",help="compare context-token telemetry between two tasks");b.add_argument("--before",required=True);b.add_argument("--after",required=True);b.add_argument("--json",action="store_true")
  g=sub.add_parser("graph");gsub=g.add_subparsers(dest="graph_command",required=True);gsub.add_parser("status");gsub.add_parser("update")
+ m=sub.add_parser("mcp", help="start the Fame stdio MCP server")
+ c=sub.add_parser("codex", help="manage Codex extension integration");csub=c.add_subparsers(dest="codex_command",required=True)
+ ci=csub.add_parser("install", help="install project-scoped Fame Codex integration");ci.add_argument("--project",action="store_true")
+ csub.add_parser("status", help="diagnose project-scoped Fame Codex integration")
  return p
 def main(argv=None):
  args=parser().parse_args(argv); root=project_root(); config=merged_config(root); runner=CodexRunner(config.get("codex_binary","codex")); graph=GraphAdapter(config.get("graphify_binary","graphify"))
+ if args.command=="mcp": return serve_mcp(root)
+ if args.command=="codex":
+  if args.codex_command=="install":
+   if not args.project: print("codex install requires --project",file=sys.stderr); return 2
+   try: emit({"actions":codex_install(root),"status":codex_status(root)}); return 0
+   except (RuntimeError, OSError) as e: print(str(e),file=sys.stderr); return 2
+  emit(codex_status(root)); return 0 if codex_status(root)["healthy"] else 2
  if args.command=="init": emit({"actions":initialize(root,args.production),"root":str(root)});return 0
  if args.command=="models":
   resolver=ModelResolver(config); catalog,note=runner.models(); emit({"note":note,"models":[{"role":r.value,"model":resolver.resolve(r).model,"reasoning":resolver.resolve(r).effort,"catalog_known":resolver.resolve(r).model in catalog if catalog else None} for r in Role]});return 0
  if args.command=="doctor":
   git=shutil.which("git"); codex=runner.available(); catalog,note=runner.models() if codex else ([],"Codex absent")
   production=project_config(root).get("production",False); commands=project_config(root).get("verification",{}).get("commands",[])
-  emit({"fame_version":__version__,"python":sys.version.split()[0],"git":bool(git),"git_repository":(root/".git").exists(),"codex":codex,"model_catalog":note,"graph":graph.status(root),"project_initialized":fame_dir(root).exists(),"schema_version":(fame_dir(root)/"schema-version").read_text().strip() if (fame_dir(root)/"schema-version").exists() else None,"production":{"enabled":production,"deterministic_verification_configured":bool(commands),"safe":not production or bool(commands)}});return 0 if not production or bool(commands) else 2
+  report=mcp_doctor(root); report.update({"python":sys.version.split()[0],"git":bool(git),"git_repository":(root/".git").exists(),"codex":codex,"model_catalog":note,"graph":graph.status(root)})
+  emit(report);return 0 if not production or (bool(commands) and report["production"]["live_checkout_clean"]) else 2
  if args.command=="graph":
   if args.graph_command=="status":emit(graph.status(root));return 0
   ok,msg=graph.update(root);emit({"success":ok,"message":msg});return 0 if ok else 1

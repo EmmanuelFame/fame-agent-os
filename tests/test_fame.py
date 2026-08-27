@@ -16,6 +16,8 @@ from fame_agent_os.escalation import EscalationGovernor
 from fame_agent_os.cli import main
 from fame_agent_os.orchestrator import Orchestrator
 from fame_agent_os.codex import CodexResult
+from fame_agent_os.mcp import serve, call, TOOLS
+from fame_agent_os.installer import codex_install, codex_status
 
 
 class VersionTests(unittest.TestCase):
@@ -23,6 +25,34 @@ class VersionTests(unittest.TestCase):
   root = Path(__file__).resolve().parents[1]
   data = tomllib.loads((root/"pyproject.toml").read_text())
   self.assertEqual(__version__, data["project"]["version"])
+
+class V13IntegrationTests(unittest.TestCase):
+ def setUp(self):
+  self.d=tempfile.TemporaryDirectory(); self.root=Path(self.d.name); (self.root/".git").mkdir(); initialize(self.root)
+ def tearDown(self): self.d.cleanup()
+ def test_codex_installer_is_idempotent_and_preserves_config(self):
+  config=self.root/".codex/config.toml"; config.parent.mkdir(); config.write_text('[profiles.custom]\nmodel = "user-model"\n')
+  first=codex_install(self.root); contents=config.read_text(); second=codex_install(self.root)
+  self.assertIn('model = "user-model"', config.read_text()); self.assertEqual(contents,config.read_text()); self.assertEqual(first,second)
+  self.assertTrue(codex_status(self.root)["healthy"]); self.assertEqual(__import__("tomllib").loads(contents)["mcp_servers"]["fame"]["args"],["mcp"])
+ def test_mcp_initialize_list_route_and_malformed_request(self):
+  requests='not-json\n'+json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}})+'\n'+json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})+'\n'+json.dumps({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fame_route","arguments":{"task":"Change button label"}}})+'\n'
+  output=io.StringIO()
+  with patch("sys.stdin",io.StringIO(requests)), patch("sys.stdout",output): self.assertEqual(serve(self.root),0)
+  rows=[json.loads(x) for x in output.getvalue().splitlines()]
+  self.assertEqual(rows[0]["error"]["code"],-32700); self.assertEqual(rows[1]["result"]["serverInfo"]["name"],"fame")
+  self.assertEqual(len(rows[2]["result"]["tools"]),len(TOOLS)); self.assertEqual(json.loads(rows[3]["result"]["content"][0]["text"])["selected_agent"],"fame-operator")
+ def test_blocked_mcp_prepare_creates_no_task(self):
+  result=call(self.root,"fame_prepare_task",{"task":"destructive financial migration with unresolved accounting invariants","max_tier":"builder"})
+  self.assertFalse(result["allowed"]); self.assertFalse((self.root/".fame/tasks/FAME-0001").exists())
+ def test_prohibition_does_not_trigger_risk_route(self):
+  route=Router().route("Never deploy automatically; change the button label")
+  self.assertEqual(route.classification,"F1"); self.assertEqual(route.risk,"low")
+ def test_mcp_finish_runs_deterministic_verification(self):
+  config=json.loads((self.root/".fame/config.json").read_text()); config["verification"]["commands"]=["true"]; (self.root/".fame/config.json").write_text(json.dumps(config))
+  route=Router().route("Change button label"); task=create_task(self.root,"Change button label",route,"balanced",None)
+  result=call(self.root,"fame_finish_task",{"task_id":task["id"]})
+  self.assertTrue(result["success"]); self.assertEqual(result["status"],"DONE")
 
 class RoutingTests(unittest.TestCase):
  def test_routes_examples(self):

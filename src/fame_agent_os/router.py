@@ -18,7 +18,10 @@ class Route:
 
 class Router:
     def route(self, task: str, budget: str = "balanced", max_tier: str | None = None, established_decision: bool = False) -> Route:
-        text = task.lower(); reasons=[]; risk_hits = re.findall(RISK, text)
+        text = task.lower(); reasons=[]
+        # A safety prohibition is not an instruction to perform the risky action.
+        risk_text = re.sub(r"\b(?:never|do not|don't|without|avoid)\b[^.!?\n]*", "", text)
+        risk_hits = re.findall(RISK, risk_text)
         risk = "high" if risk_hits else "low"
         if re.search(r"^(git status|format|lint|test|graph update|check )", text):
             result = Route("F0", None, Tier.OPERATOR, None, "low", ("deterministic operation",))
