@@ -9,6 +9,7 @@ from .installer import initialize
 from .models import ModelResolver, Role
 from .orchestrator import Orchestrator
 from .router import Router
+from .self_check import check as self_check
 from .state import fame_dir
 from .telemetry import aggregate
 from .verifier import verify
@@ -28,6 +29,7 @@ def parser():
  for name in ("task","plan","debug"):
   q=sub.add_parser(name);q.add_argument("task");common(q);q.add_argument("--worktree",action="store_true")
  v=sub.add_parser("verify");v.add_argument("--json",action="store_true")
+ s=sub.add_parser("self-check", help="validate Fame project state without invoking Codex");s.add_argument("--json",action="store_true")
  sub.add_parser("status")
  u=sub.add_parser("usage");u.add_argument("--task");u.add_argument("--json",action="store_true")
  g=sub.add_parser("graph");gsub=g.add_subparsers(dest="graph_command",required=True);gsub.add_parser("status");gsub.add_parser("update")
@@ -57,6 +59,8 @@ def main(argv=None):
   except Exception as e: print(str(e),file=sys.stderr);return 2
  if args.command=="verify":
   result=verify(root,project_config(root).get("verification",{}).get("commands",[])); emit({"success":result.success,"results":result.results},args.json);return 0 if result.success else 1
+ if args.command=="self-check":
+  result=self_check(root); emit({"success":result.success,"errors":result.errors},args.json);return 0 if result.success else 1
  if args.command=="status": emit(json.loads((fame_dir(root)/"state"/"CURRENT.json").read_text()) if (fame_dir(root)/"state"/"CURRENT.json").exists() else {"status":"NOT_INITIALIZED"});return 0
  if args.command=="usage": emit(aggregate(fame_dir(root)/"logs"/"runs.jsonl",args.task),args.json);return 0
  return 1

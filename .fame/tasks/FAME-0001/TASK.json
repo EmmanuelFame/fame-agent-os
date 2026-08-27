@@ -1,0 +1,28 @@
+{
+  "id": "FAME-0001",
+  "goal": "Add a self-check command that validates Fame project state consistency without invoking an LLM, including automated tests and documentation.",
+  "acceptance_criteria": [
+    "Implementation matches task goal",
+    "Configured verification succeeds"
+  ],
+  "class": "F2",
+  "risk_indicators": [
+    "normal implementation work"
+  ],
+  "route": {
+    "role": "builder",
+    "effort": "low",
+    "phases": [
+      "builder",
+      "verifier"
+    ]
+  },
+  "budget_mode": "balanced",
+  "max_tier": null,
+  "status": "DONE",
+  "timestamps": {
+    "created": "2026-08-27T12:36:39.204834+00:00",
+    "done": "2026-08-27T12:40:05.776425+00:00"
+  },
+  "graph_context": {}
+}

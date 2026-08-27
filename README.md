@@ -8,4 +8,6 @@ Install once per machine with `uv tool install --editable .`, then run `fame ini
 
 Graphify is optional navigation memory; source remains authoritative. Fame records concise task state, phase handoffs, JSONL telemetry, and deterministic verification. Production projects (`fame init --production`) require an explicit worktree for modifying tasks; Fame never merges, deploys, restarts services, uses `--yolo`, or enables Fast tier by default.
 
-Useful commands: `fame doctor`, `fame models`, `fame route "Change button label"`, `fame task "Add a CRUD endpoint" --dry-run`, `fame status`, and `fame usage`.
+Useful commands: `fame doctor`, `fame models`, `fame route "Change button label"`, `fame task "Add a CRUD endpoint" --dry-run`, `fame status`, `fame self-check`, and `fame usage`.
+
+`fame self-check` reads only `.fame` project state and exits nonzero when its schema marker, core state files, task artifacts, or current-task references are inconsistent. It never invokes Codex; use `--json` for machine-readable diagnostics.

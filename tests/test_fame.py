@@ -37,6 +37,15 @@ class StateTests(unittest.TestCase):
   self.assertIn("my rules",second);self.assertEqual(second.count(BEGIN),1);self.assertEqual(first,second);self.assertTrue((self.root/".fame/state/CURRENT.json").exists())
  def test_task_transitions(self):
   initialize(self.root); route=Router().route("add crud endpoint"); task=create_task(self.root,"x",route,"balanced",None);self.assertEqual(task["id"],"FAME-0001");transition(self.root,task["id"],"INTERRUPTED","builder");self.assertEqual(json.loads((self.root/".fame/tasks/FAME-0001/TASK.json").read_text())["status"],"INTERRUPTED")
+ def test_self_check_accepts_consistent_state(self):
+  initialize(self.root)
+  with patch("fame_agent_os.cli.project_root",return_value=self.root), patch("fame_agent_os.codex.CodexRunner.run",side_effect=AssertionError("called")):
+   self.assertEqual(main(["self-check","--json"]),0)
+ def test_self_check_reports_current_task_mismatch(self):
+  initialize(self.root)
+  (self.root/".fame/state/CURRENT.json").write_text(json.dumps({"task_id":"FAME-9999","status":"PLANNED","phase":"created"}))
+  with patch("fame_agent_os.cli.project_root",return_value=self.root):
+   self.assertEqual(main(["self-check"]),1)
 
 class RunnerTests(unittest.TestCase):
  def test_command_security(self):
