@@ -8,7 +8,7 @@ from .config import merged_config, project_config, project_root
 from .installer import codex_status
 from .models import ModelResolver
 from .router import Router
-from .state import create_task, fame_dir, transition
+from .state import create_task, fame_dir, next_task_id as next_local_task_id, transition
 from .telemetry import aggregate
 from .verifier import verify
 from .worktree import (create as create_worktree, destination_for, next_task_id,
@@ -82,7 +82,7 @@ def prepare(root: Path, args: dict) -> dict:
     config = merged_config(root)
     budget = args.get("budget") or config.get("budget", config.get("default_budget", "balanced"))
     route = Router().route(args["task"], budget, args.get("max_tier"), bool(args.get("human_approved")))
-    task_id = next_task_id(root)
+    task_id = next_task_id(root) if check["requires_worktree"] else next_local_task_id(root)
     workspace = root
     branch = None
     if check["requires_worktree"]:

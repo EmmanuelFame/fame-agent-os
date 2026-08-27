@@ -1,0 +1,5 @@
+# BEGIN FAME AGENT OS CODEX INTEGRATION
+[mcp_servers.fame]
+command = "fame"
+args = ["mcp"]
+# END FAME AGENT OS CODEX INTEGRATION

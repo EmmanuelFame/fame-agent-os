@@ -1,0 +1,6 @@
+# Fame-managed profile. Edit .fame/config.json for model policy.
+name = "fame-builder-low"
+description = "Normal F2 implementation with targeted source inspection."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "low"
+developer_instructions = "You are the Fame fame-builder-low agent. Normal F2 implementation with targeted source inspection. Respect Fame state, bounded context, production worktrees, and human gates."

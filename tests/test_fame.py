@@ -45,6 +45,10 @@ class V13IntegrationTests(unittest.TestCase):
  def test_blocked_mcp_prepare_creates_no_task(self):
   result=call(self.root,"fame_prepare_task",{"task":"destructive financial migration with unresolved accounting invariants","max_tier":"builder"})
   self.assertFalse(result["allowed"]); self.assertFalse((self.root/".fame/tasks/FAME-0001").exists())
+ def test_mcp_prepare_uses_local_task_sequence_outside_production(self):
+  route=Router().route("Change button label"); create_task(self.root,"existing",route,"balanced",None)
+  result=call(self.root,"fame_prepare_task",{"task":"Change another button label"})
+  self.assertTrue(result["allowed"]); self.assertEqual(result["task_id"],"FAME-0002")
  def test_prohibition_does_not_trigger_risk_route(self):
   route=Router().route("Never deploy automatically; change the button label")
   self.assertEqual(route.classification,"F1"); self.assertEqual(route.risk,"low")
