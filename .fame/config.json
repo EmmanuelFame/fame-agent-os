@@ -1,0 +1,10 @@
+{
+  "budget": "balanced",
+  "verification": {
+    "commands": []
+  },
+  "graph": {
+    "budget": 400
+  },
+  "production": false
+}

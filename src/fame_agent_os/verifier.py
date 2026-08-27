@@ -1,0 +1,14 @@
+from __future__ import annotations
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+@dataclass
+class Verification: success:bool; results:list[dict]
+def verify(root:Path, commands:list[str]) -> Verification:
+    results=[]
+    for command in commands:
+        # Commands are project-owned configuration; no shell is used: split only simple argv strings.
+        import shlex
+        args=shlex.split(command); p=subprocess.run(args,cwd=root,text=True,capture_output=True,check=False)
+        results.append({"command":args,"returncode":p.returncode,"stdout":p.stdout[-4000:],"stderr":p.stderr[-4000:]})
+    return Verification(all(x["returncode"]==0 for x in results),results)
