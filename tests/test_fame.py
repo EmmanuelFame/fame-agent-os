@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, subprocess, tempfile, unittest, tomllib
+import io, json, subprocess, tempfile, unittest, tomllib
 from pathlib import Path
 from unittest.mock import patch
 from fame_agent_os import __version__
@@ -115,7 +115,37 @@ class OtherTests(unittest.TestCase):
    def __init__(self): self.calls=[]
    def run(self,prompt,spec,write,cwd): self.calls.append((spec.model,write,prompt));return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
   with tempfile.TemporaryDirectory() as d:
-   root=Path(d);(root/".git").mkdir();initialize(root);runner=FakeRunner();task=Orchestrator(root,{"models":{},"verification":{"commands":[]}},runner).task("Redesign vendor settlement and ledger semantics",Router().route("Redesign vendor settlement and ledger semantics"),"balanced",None)
+   root=Path(d);(root/".git").mkdir();initialize(root);runner=FakeRunner();task=Orchestrator(root,{"models":{},"verification":{"commands":["true"]}},runner).task("Redesign vendor settlement and ledger semantics",Router().route("Redesign vendor settlement and ledger semantics"),"balanced",None)
    self.assertEqual(task["id"],"FAME-0001");self.assertEqual(task["status"],"DONE");self.assertEqual(len(runner.calls),3);self.assertFalse(runner.calls[0][1]);self.assertTrue(runner.calls[1][1]);self.assertTrue((root/".fame/tasks/FAME-0001/PLAN.md").exists());self.assertTrue((root/".fame/tasks/FAME-0001/VERIFY.md").exists())
    rows=[json.loads(line) for line in (root/".fame/logs/runs.jsonl").read_text().splitlines()]
    self.assertTrue(all("context_diagnostics" in row and "fresh_input_tokens" in row for row in rows))
+ def test_production_worktree_runs_task_without_changing_live_checkout(self):
+  class FakeRunner:
+   def run(self,prompt,spec,write,cwd):
+    if write: (Path(cwd)/"builder-change.txt").write_text("isolated")
+    return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
+  with tempfile.TemporaryDirectory() as d, patch.dict("os.environ",{"XDG_STATE_HOME":str(Path(d).parent/(Path(d).name+"-machine-state"))}), patch("fame_agent_os.cli.project_root",return_value=Path(d)), patch("fame_agent_os.cli.CodexRunner",return_value=FakeRunner()):
+   root=Path(d); subprocess.run(["git","init"],cwd=root,check=True,capture_output=True); subprocess.run(["git","config","user.email","test@example.com"],cwd=root,check=True); subprocess.run(["git","config","user.name","Test"],cwd=root,check=True)
+   (root/"README").write_text("base"); subprocess.run(["git","add","README"],cwd=root,check=True); subprocess.run(["git","commit","-m","base"],cwd=root,check=True,capture_output=True)
+   initialize(root,True); config=json.loads((root/".fame/config.json").read_text()); config["verification"]["commands"]=["true"]; (root/".fame/config.json").write_text(json.dumps(config)); subprocess.run(["git","add","."],cwd=root,check=True); subprocess.run(["git","commit","-m","initialize fame"],cwd=root,check=True,capture_output=True)
+   self.assertEqual(main(["task","Change button label","--worktree"]),0)
+   worktree=root.parent/".fame-worktrees"/root.name/"FAME-0001"; self.assertTrue(worktree.exists()); self.assertTrue((worktree/"builder-change.txt").exists()); self.assertFalse((root/"builder-change.txt").exists()); self.assertEqual(subprocess.run(["git","branch","--show-current"],cwd=root,text=True,capture_output=True,check=True).stdout.strip(),"master")
+   task_path=worktree/".fame/tasks/FAME-0001/TASK.json"; task=json.loads(task_path.read_text()); task["status"]="INTERRUPTED"; task_path.write_text(json.dumps(task)); self.assertEqual(main(["task","Change button label","--worktree"]),2); self.assertFalse((worktree.parent/"FAME-0002").exists())
+ def test_production_preflight_rejections_create_no_worktree(self):
+  with tempfile.TemporaryDirectory() as d, patch.dict("os.environ",{"XDG_STATE_HOME":str(Path(d).parent/(Path(d).name+"-machine-state"))}), patch("fame_agent_os.cli.project_root",return_value=Path(d)):
+   root=Path(d); subprocess.run(["git","init"],cwd=root,check=True,capture_output=True); initialize(root,True)
+   (root/"dirty.txt").write_text("dirty")
+   self.assertEqual(main(["task","Change button label","--worktree"]),2)
+   self.assertFalse((root.parent/".fame-worktrees"/root.name).exists())
+   self.assertEqual(main(["task","Redesign vendor settlement and ledger semantics","--worktree","--max-tier","builder"]),2)
+   self.assertFalse((root.parent/".fame-worktrees"/root.name).exists())
+ def test_production_status_is_visible_without_dirtying_live_checkout(self):
+  class FakeRunner:
+   def run(self,prompt,spec,write,cwd): return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
+  with tempfile.TemporaryDirectory() as d, patch.dict("os.environ",{"XDG_STATE_HOME":str(Path(d).parent/(Path(d).name+"-machine-state"))}), patch("fame_agent_os.cli.project_root",return_value=Path(d)), patch("fame_agent_os.cli.CodexRunner",return_value=FakeRunner()), patch("sys.stdout",new_callable=io.StringIO) as output:
+   root=Path(d); subprocess.run(["git","init"],cwd=root,check=True,capture_output=True); subprocess.run(["git","config","user.email","test@example.com"],cwd=root,check=True); subprocess.run(["git","config","user.name","Test"],cwd=root,check=True); (root/"README").write_text("base"); subprocess.run(["git","add","README"],cwd=root,check=True); subprocess.run(["git","commit","-m","base"],cwd=root,check=True,capture_output=True)
+   initialize(root,True); config=json.loads((root/".fame/config.json").read_text()); config["verification"]["commands"]=["true"]; (root/".fame/config.json").write_text(json.dumps(config)); subprocess.run(["git","add","."],cwd=root,check=True); subprocess.run(["git","commit","-m","fame"],cwd=root,check=True,capture_output=True)
+   self.assertEqual(main(["task","Change button label","--worktree"]),0); output.seek(0); output.truncate(0); self.assertEqual(main(["status"]),0); status=json.loads(output.getvalue()); self.assertEqual(status["production_tasks"][0]["task_id"],"FAME-0001"); self.assertEqual(subprocess.run(["git","status","--porcelain"],cwd=root,text=True,capture_output=True,check=True).stdout,"")
+ def test_production_doctor_requires_verification_commands(self):
+  with tempfile.TemporaryDirectory() as d, patch("fame_agent_os.cli.project_root",return_value=Path(d)):
+   root=Path(d);(root/".git").mkdir();initialize(root,True);self.assertEqual(main(["doctor"]),2)

@@ -13,7 +13,7 @@ from .self_check import check as self_check
 from .state import fame_dir
 from .telemetry import aggregate, benchmark
 from .verifier import verify
-from .worktree import create as create_worktree
+from .worktree import create as create_worktree, next_task_id as next_worktree_task_id, preflight as production_preflight, record as record_production, registry as production_registry
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps(value,indent=2)); return
@@ -42,7 +42,8 @@ def main(argv=None):
   resolver=ModelResolver(config); catalog,note=runner.models(); emit({"note":note,"models":[{"role":r.value,"model":resolver.resolve(r).model,"reasoning":resolver.resolve(r).effort,"catalog_known":resolver.resolve(r).model in catalog if catalog else None} for r in Role]});return 0
  if args.command=="doctor":
   git=shutil.which("git"); codex=runner.available(); catalog,note=runner.models() if codex else ([],"Codex absent")
-  emit({"fame_version":__version__,"python":sys.version.split()[0],"git":bool(git),"git_repository":(root/".git").exists(),"codex":codex,"model_catalog":note,"graph":graph.status(root),"project_initialized":fame_dir(root).exists(),"schema_version":(fame_dir(root)/"schema-version").read_text().strip() if (fame_dir(root)/"schema-version").exists() else None});return 0
+  production=project_config(root).get("production",False); commands=project_config(root).get("verification",{}).get("commands",[])
+  emit({"fame_version":__version__,"python":sys.version.split()[0],"git":bool(git),"git_repository":(root/".git").exists(),"codex":codex,"model_catalog":note,"graph":graph.status(root),"project_initialized":fame_dir(root).exists(),"schema_version":(fame_dir(root)/"schema-version").read_text().strip() if (fame_dir(root)/"schema-version").exists() else None,"production":{"enabled":production,"deterministic_verification_configured":bool(commands),"safe":not production or bool(commands)}});return 0 if not production or bool(commands) else 2
  if args.command=="graph":
   if args.graph_command=="status":emit(graph.status(root));return 0
   ok,msg=graph.update(root);emit({"success":ok,"message":msg});return 0 if ok else 1
@@ -51,10 +52,30 @@ def main(argv=None):
   if args.command=="route":emit(route_data(route,ModelResolver(config)),args.json);return 2 if route.blocked else 0
   if args.command in ("plan","debug") or args.dry_run:
    data=route_data(route,ModelResolver(config)); data["dry_run"]=True; data["codex_calls"]=0; emit(data); return 2 if route.blocked else 0
-  if project_config(root).get("production") and not args.worktree:
+  if route.blocked:
+   print("Required route is blocked by --max-tier",file=sys.stderr); return 2
+  production=project_config(root).get("production")
+  if production and not args.worktree:
    print("Production project guard: use --worktree for modifying task.",file=sys.stderr);return 2
+  if production and not config.get("verification",{}).get("commands",[]):
+   print("Production project unsafe: configure deterministic verification commands before running a task.",file=sys.stderr);return 2
   if args.worktree:
-   try: path,branch=create_worktree(root,"FAME-PENDING"); emit({"worktree":str(path),"branch":branch,"note":"No automatic merge or deploy."});return 0
+   try:
+    # All guards run before choosing an ID or creating any persistent task resource.
+    production_preflight(root)
+    task_id=next_worktree_task_id(root)
+    # Reserve only after preflight, so an interrupted git operation can reuse this ID.
+    record_production(root,task_id,status="PROVISIONING",branch=f"fame/{task_id.lower()}",worktree_path=str(root.parent/".fame-worktrees"/root.name/task_id),verification_state="NOT_RUN",recovery={"available":True,"action":"retry provisioning or review persistent worktree"})
+    path,branch,recovered=create_worktree(root,task_id)
+    if recovered:
+     task_file=path/".fame"/"tasks"/task_id/"TASK.json"; status=json.loads(task_file.read_text()).get("status","INTERRUPTED") if task_file.exists() else "INTERRUPTED"
+     record_production(root,task_id,status=status,branch=branch,worktree_path=str(path),recovery={"available":True,"action":"resume-or-review persistent worktree"})
+     emit({"task_id":task_id,"status":status,"worktree":str(path),"branch":branch,"changed_files":{"project":[],"fame_metadata":[]},"verification_result":None,"recovery":production_registry(root)["tasks"][task_id]["recovery"],"review_instructions":"Review or resume this persistent worktree manually; it was not deleted, merged, deployed, or restarted."}); return 2
+    worktree_config=merged_config(path); result=Orchestrator(path,worktree_config,runner).task(args.task,route,budget,args.max_tier,task_id=task_id)
+    changed=[line[3:] for line in subprocess.run(["git","status","--porcelain"],cwd=path,text=True,capture_output=True,check=False).stdout.splitlines()]
+    grouped={"project":[p for p in changed if not p.startswith(".fame/")],"fame_metadata":[p for p in changed if p.startswith(".fame/")]}
+    record_production(root,task_id,status=result.get("status"),branch=branch,worktree_path=str(path),verification_state="PASSED" if result.get("verification",{}).get("success") else "FAILED" if result.get("verification") else "NOT_RUN",verification=result.get("verification"),recovery={"available":True,"action":"review persistent worktree"})
+    emit({"task_id":result.get("id"),"status":result.get("status"),"worktree":str(path),"branch":branch,"changed_files":grouped,"verification_result":result.get("verification"),"recovery":production_registry(root)["tasks"][task_id]["recovery"],"review_instructions":"Review changes in the persistent worktree, then merge or deploy manually. Fame never merges, deploys, restarts services, modifies the live branch, or deletes this worktree."}); return 0 if result.get("status")=="DONE" else 1
    except RuntimeError as e: print(str(e),file=sys.stderr);return 2
   try: result=Orchestrator(root,config,runner).task(args.task,route,budget,args.max_tier);emit({"task_id":result.get("id"),"status":result.get("status","started")});return 0
   except Exception as e: print(str(e),file=sys.stderr);return 2
@@ -62,7 +83,9 @@ def main(argv=None):
   result=verify(root,project_config(root).get("verification",{}).get("commands",[])); emit({"success":result.success,"results":result.results},args.json);return 0 if result.success else 1
  if args.command=="self-check":
   result=self_check(root); emit({"success":result.success,"errors":result.errors},args.json);return 0 if result.success else 1
- if args.command=="status": emit(json.loads((fame_dir(root)/"state"/"CURRENT.json").read_text()) if (fame_dir(root)/"state"/"CURRENT.json").exists() else {"status":"NOT_INITIALIZED"});return 0
+ if args.command=="status":
+  state=json.loads((fame_dir(root)/"state"/"CURRENT.json").read_text()) if (fame_dir(root)/"state"/"CURRENT.json").exists() else {"status":"NOT_INITIALIZED"}
+  state["production_tasks"]=list(production_registry(root).get("tasks",{}).values()); emit(state);return 0
  if args.command=="usage": emit(aggregate(fame_dir(root)/"logs"/"runs.jsonl",args.task),args.json);return 0
  if args.command=="benchmark": emit(benchmark(fame_dir(root)/"logs"/"runs.jsonl",args.before,args.after),args.json);return 0
  return 1

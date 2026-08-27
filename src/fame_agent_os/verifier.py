@@ -5,6 +5,7 @@ from pathlib import Path
 @dataclass
 class Verification: success:bool; results:list[dict]
 def verify(root:Path, commands:list[str]) -> Verification:
+    if not commands: return Verification(False,[{"command":[],"returncode":None,"stdout":"","stderr":"no deterministic verification commands configured"}])
     results=[]
     for command in commands:
         # Commands are project-owned configuration; no shell is used: split only simple argv strings.

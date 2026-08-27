@@ -1,0 +1,31 @@
+{
+  "id": "FAME-0004",
+  "goal": "Harden Fame Agent OS for safe production VPS operation. Implement production worktree execution so tasks on projects initialized with production=true execute entirely inside an isolated Git worktree and task branch rather than modifying the live checkout. The worktree must use the real task ID, Fame must actually run orchestration inside it, and the live production checkout must remain unchanged. Never automatically merge, deploy, restart services, modify the live branch, or delete the worktree after completion. Return task ID, final status, worktree path, branch, changed files, verification result, and review instructions. Make worktree locations persistent and recoverable rather than relying on disposable /tmp. Add deterministic safeguards for dirty repositories, branch collisions, interrupted tasks, and failures. Production projects with no configured deterministic verification commands must be reported as unsafe by doctor and must not silently claim deterministic verification succeeded. Preserve --max-tier, routing, telemetry, context budgets, and phase isolation. Add comprehensive regression tests and VPS documentation.",
+  "acceptance_criteria": [
+    "Implementation matches task goal",
+    "Configured verification succeeds"
+  ],
+  "class": "F4",
+  "risk_indicators": [
+    "risk-sensitive domain: deploy, delete",
+    "difficult diagnostic or optimization work",
+    "normal implementation work"
+  ],
+  "route": {
+    "role": "architect",
+    "effort": "medium",
+    "phases": [
+      "architect",
+      "builder",
+      "verifier"
+    ]
+  },
+  "budget_mode": "balanced",
+  "max_tier": "architect",
+  "status": "DONE",
+  "timestamps": {
+    "created": "2026-08-27T13:44:40.977525+00:00",
+    "done": "2026-08-27T13:53:43.284820+00:00"
+  },
+  "graph_context": {}
+}

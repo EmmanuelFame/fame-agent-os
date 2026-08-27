@@ -1,0 +1,42 @@
+{
+  "id": "FAME-0005",
+  "goal": "Following the approved pattern established by FAME-0004, finish Fame Agent OS VPS hardening. Fix preflight ordering so blocked routes, max-tier violations, unsafe production configuration, dirty repositories, and failed preconditions create no task branch or worktree. Add a machine-level production task registry outside the repository so fame status from the live checkout reports isolated worktree tasks including task ID, status, branch, worktree path, verification state, timestamps, and recovery information without dirtying the live checkout. Preserve portable project state separately from machine runtime state. Make production task IDs recoverable and collision-safe across interrupted runs. Distinguish project changed files from Fame metadata files. Add deterministic status and recovery information for persistent production worktrees. Debug interrupted-task recovery behavior. Preserve all production safety invariants established by FAME-0004. Add regression tests for blocked-task-no-worktree, live-checkout-remains-clean, production-status-visible-from-live-checkout, and interrupted-task recovery.",
+  "acceptance_criteria": [
+    "Implementation matches task goal",
+    "Configured verification succeeds"
+  ],
+  "class": "F4",
+  "risk_indicators": [
+    "architectural or broad-impact wording",
+    "difficult diagnostic or optimization work",
+    "normal implementation work"
+  ],
+  "route": {
+    "role": "architect",
+    "effort": "medium",
+    "phases": [
+      "architect",
+      "builder",
+      "verifier"
+    ]
+  },
+  "budget_mode": "balanced",
+  "max_tier": "architect",
+  "status": "FAILED",
+  "timestamps": {
+    "created": "2026-08-27T14:12:11.934719+00:00",
+    "failed": "2026-08-27T14:20:36.726618+00:00"
+  },
+  "graph_context": {},
+  "verification": {
+    "success": false,
+    "results": [
+      {
+        "command": [],
+        "returncode": null,
+        "stdout": "",
+        "stderr": "no deterministic verification commands configured"
+      }
+    ]
+  }
+}
