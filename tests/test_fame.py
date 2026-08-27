@@ -22,6 +22,20 @@ class RoutingTests(unittest.TestCase):
   self.assertEqual(r.route("Debug an intermittent transaction failure across two services").classification,"F3")
   self.assertEqual(r.route("Redesign vendor settlement and ledger semantics").classification,"F4")
   self.assertEqual(r.route("destructive financial migration with unresolved accounting invariants").classification,"F5")
+ def test_context_efficiency_diagnosis_is_f3(self):
+  task = "Optimize context efficiency, diagnose excessive token usage, add regression tests and benchmark the improvement"
+  route = Router().route(task)
+  self.assertEqual(route.classification, "F3")
+  self.assertEqual(route.role, Role.BUILDER)
+  self.assertEqual(route.effort, "medium")
+
+ def test_high_engineering_score_without_architecture_stays_builder(self):
+  task = "Diagnose performance regression, benchmark it, add tests, implement fixes and optimize context efficiency"
+  route = Router().route(task)
+  self.assertEqual(route.classification, "F3")
+  self.assertEqual(route.role, Role.BUILDER)
+  self.assertEqual(route.effort, "medium")
+
  def test_budget_and_max(self):
   self.assertEqual(Router().route("redesign normal system", "economy").classification,"F2")
   self.assertTrue(Router().route("Redesign vendor settlement and ledger semantics",max_tier="builder").blocked)

@@ -27,20 +27,61 @@ class Router:
         else:
             score = 0
             if risk_hits: score += 4; reasons.append("risk-sensitive domain: " + ", ".join(risk_hits[:3]))
-            if re.search(ARCH, text): score += 3; reasons.append("architectural or broad-impact wording")
-            if re.search(r"intermittent|debug|failure|two services|cross.service", text): score += 4; reasons.append("ambiguous multi-component diagnosis")
+            arch_hit = bool(re.search(ARCH, text))
+            if arch_hit: score += 3; reasons.append("architectural or broad-impact wording")
+            diagnostic_hit = bool(re.search(
+                r"intermittent|debug|diagnos(?:e|is|tic)|failure|two services|cross.service|"
+                r"context efficien|token efficien|performance regression|benchmark",
+                text,
+            ))
+            if diagnostic_hit: score += 4; reasons.append("difficult diagnostic or optimization work")
             if re.search(r"crud|endpoint|following existing|implement|add ", text): score += 2; reasons.append("normal implementation work")
             if established_decision and risk_hits: score -= 3; reasons.append("approved pattern lowers execution tier")
             policy=POLICIES[budget]
             exceptional = bool(re.search(r"destructive.*(financial|accounting)|unresolved.*invariant", text))
+            # Difficulty and architectural authority are separate axes.
+            # A large engineering score alone must never summon the architect.
+            architect_eligible = arch_hit or bool(risk_hits)
+
             if exceptional:
-                result=Route("F5", Role.ARCHITECT, Tier.ARCHITECT, "high", "high", tuple(reasons or ["exceptional unresolved high-risk architecture"]))
-            elif score >= policy.architect_threshold:
-                result=Route("F4", Role.ARCHITECT, Tier.ARCHITECT, "medium", risk, tuple(reasons or ["high impact decision"]))
-            elif score >= policy.difficult_threshold:
-                result=Route("F3", Role.BUILDER, Tier.BUILDER, "medium", risk, tuple(reasons or ["difficult engineering"]))
+                result = Route(
+                    "F5",
+                    Role.ARCHITECT,
+                    Tier.ARCHITECT,
+                    "high",
+                    "high",
+                    tuple(reasons or ["exceptional unresolved high-risk architecture"]),
+                )
+            elif architect_eligible and score >= policy.architect_threshold:
+                result = Route(
+                    "F4",
+                    Role.ARCHITECT,
+                    Tier.ARCHITECT,
+                    "medium",
+                    risk,
+                    tuple(reasons or ["high impact architectural decision"]),
+                )
+            elif diagnostic_hit or score >= policy.difficult_threshold:
+                result = Route(
+                    "F3",
+                    Role.BUILDER,
+                    Tier.BUILDER,
+                    "medium",
+                    risk,
+                    tuple(reasons or ["difficult engineering"]),
+                )
             else:
-                result=Route("F2", Role.BUILDER, Tier.BUILDER, "low", risk, tuple(reasons or ["normal engineering implementation", "no architectural uncertainty detected"]))
+                result = Route(
+                    "F2",
+                    Role.BUILDER,
+                    Tier.BUILDER,
+                    "low",
+                    risk,
+                    tuple(reasons or [
+                        "normal engineering implementation",
+                        "no architectural uncertainty detected",
+                    ]),
+                )
         if not tier_allowed(result.tier, max_tier):
             return Route(result.classification, result.role, result.tier, result.effort, result.risk, result.reasons + ("blocked by --max-tier",), True)
         return result
