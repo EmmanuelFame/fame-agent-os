@@ -7,7 +7,8 @@ from fame_agent_os.models import ModelResolver, Role, ModelSpec
 from fame_agent_os.installer import initialize, BEGIN, END
 from fame_agent_os.state import next_task_id, create_task, transition
 from fame_agent_os.codex import CodexRunner
-from fame_agent_os.telemetry import parse_jsonl, aggregate, append
+from fame_agent_os.telemetry import parse_jsonl, aggregate, append, context_metrics, context_warnings, benchmark
+from fame_agent_os.context import build_phase_context
 from fame_agent_os.graph import GraphAdapter
 from fame_agent_os.policy import tier_allowed
 from fame_agent_os.escalation import EscalationGovernor
@@ -77,7 +78,18 @@ class OtherTests(unittest.TestCase):
   r=ModelResolver({"models":{"builder":{"model":"other","effort":"medium"}}});self.assertEqual(r.resolve(Role.BUILDER).model,"other");self.assertEqual(r.resolve(Role.ARCHITECT,True).effort,"high")
  def test_telemetry(self):
   with tempfile.TemporaryDirectory() as d:
-   p=Path(d)/"runs.jsonl";append(p,{"task_id":"A","role":"builder","status":"success","input_tokens":4,"output_tokens":3,"reasoning_output_tokens":1});a=aggregate(p);self.assertEqual(a["by_role"]["builder"]["output_tokens"],3)
+   p=Path(d)/"runs.jsonl";append(p,{"task_id":"A","role":"builder","status":"success","input_tokens":4,"cached_input_tokens":3,"output_tokens":3,"reasoning_output_tokens":1});a=aggregate(p);self.assertEqual(a["by_role"]["builder"]["output_tokens"],3);self.assertEqual(a["by_role"]["builder"]["fresh_input_tokens"],1);self.assertEqual(a["by_role"]["builder"]["cache_ratio"],.75)
+ def test_context_metrics_warnings_and_benchmark(self):
+  self.assertEqual(context_metrics(10,7)["fresh_input_tokens"],3)
+  self.assertIn("fresh_input_above_threshold",context_warnings(context_metrics(11,0),settings={"fresh_input_warning_tokens":10}))
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d)/"runs.jsonl";append(p,{"task_id":"before","role":"builder","input_tokens":100,"cached_input_tokens":60});append(p,{"task_id":"after","role":"builder","input_tokens":50,"cached_input_tokens":40})
+   report=benchmark(p,"before","after");self.assertEqual(report["delta"]["fresh_input_tokens"],-30);self.assertEqual(report["fresh_input_reduction_ratio"],.75)
+ def test_bounded_phase_context_and_verifier_handoff(self):
+  task={"id":"FAME-0001","goal":"x","acceptance_criteria":["works"]}
+  verifier=build_phase_context("verifier",task,Path("."),{"max_source_files":2})
+  self.assertIn("HANDOFF.md",verifier.prompt);self.assertIn("git diff --stat",verifier.prompt);self.assertEqual(verifier.diagnostics["source_file_limit"],2)
+  with self.assertRaises(ValueError): build_phase_context("builder",task,Path("."),{"max_prompt_chars":1})
  def test_graph_absent(self):
   g=GraphAdapter("certainly-none");self.assertFalse(g.status(Path("."))["available"]);self.assertFalse(g.update(Path("."))[0])
  def test_escalation_governor(self):
@@ -93,7 +105,9 @@ class OtherTests(unittest.TestCase):
  def test_orchestrator_isolates_phases_and_writes_artifacts(self):
   class FakeRunner:
    def __init__(self): self.calls=[]
-   def run(self,prompt,spec,write,cwd): self.calls.append((spec.model,write,prompt));return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
+   def run(self,prompt,spec,write,cwd): self.calls.append((spec.model,write,prompt));return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
   with tempfile.TemporaryDirectory() as d:
    root=Path(d);(root/".git").mkdir();initialize(root);runner=FakeRunner();task=Orchestrator(root,{"models":{},"verification":{"commands":[]}},runner).task("Redesign vendor settlement and ledger semantics",Router().route("Redesign vendor settlement and ledger semantics"),"balanced",None)
    self.assertEqual(task["id"],"FAME-0001");self.assertEqual(len(runner.calls),3);self.assertFalse(runner.calls[0][1]);self.assertTrue(runner.calls[1][1]);self.assertTrue((root/".fame/tasks/FAME-0001/PLAN.md").exists());self.assertTrue((root/".fame/tasks/FAME-0001/VERIFY.md").exists())
+   rows=[json.loads(line) for line in (root/".fame/logs/runs.jsonl").read_text().splitlines()]
+   self.assertTrue(all("context_diagnostics" in row and "fresh_input_tokens" in row for row in rows))

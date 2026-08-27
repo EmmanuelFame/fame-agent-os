@@ -11,7 +11,7 @@ from .orchestrator import Orchestrator
 from .router import Router
 from .self_check import check as self_check
 from .state import fame_dir
-from .telemetry import aggregate
+from .telemetry import aggregate, benchmark
 from .verifier import verify
 from .worktree import create as create_worktree
 
@@ -32,6 +32,7 @@ def parser():
  s=sub.add_parser("self-check", help="validate Fame project state without invoking Codex");s.add_argument("--json",action="store_true")
  sub.add_parser("status")
  u=sub.add_parser("usage");u.add_argument("--task");u.add_argument("--json",action="store_true")
+ b=sub.add_parser("benchmark",help="compare context-token telemetry between two tasks");b.add_argument("--before",required=True);b.add_argument("--after",required=True);b.add_argument("--json",action="store_true")
  g=sub.add_parser("graph");gsub=g.add_subparsers(dest="graph_command",required=True);gsub.add_parser("status");gsub.add_parser("update")
  return p
 def main(argv=None):
@@ -63,4 +64,5 @@ def main(argv=None):
   result=self_check(root); emit({"success":result.success,"errors":result.errors},args.json);return 0 if result.success else 1
  if args.command=="status": emit(json.loads((fame_dir(root)/"state"/"CURRENT.json").read_text()) if (fame_dir(root)/"state"/"CURRENT.json").exists() else {"status":"NOT_INITIALIZED"});return 0
  if args.command=="usage": emit(aggregate(fame_dir(root)/"logs"/"runs.jsonl",args.task),args.json);return 0
+ if args.command=="benchmark": emit(benchmark(fame_dir(root)/"logs"/"runs.jsonl",args.before,args.after),args.json);return 0
  return 1

@@ -1,0 +1,29 @@
+{
+  "id": "FAME-0002",
+  "goal": "Optimize Fame Agent OS context efficiency using the measured FAME-0001 telemetry. Diagnose why the builder consumed 491887 input tokens and the verifier consumed 189314 input tokens. Distinguish total, cached, and fresh input context. Reduce unnecessary context injection, repeated repository reads, oversized phase handoffs, and verifier re-ingestion without weakening correctness. Add per-run context diagnostics, cache ratios, fresh-input metrics, abnormal-context warnings, bounded context construction, regression tests, documentation, and a benchmark mechanism for comparing before and after token efficiency. Preserve phase isolation and existing routing behavior.",
+  "acceptance_criteria": [
+    "Implementation matches task goal",
+    "Configured verification succeeds"
+  ],
+  "class": "F3",
+  "risk_indicators": [
+    "difficult diagnostic or optimization work",
+    "normal implementation work"
+  ],
+  "route": {
+    "role": "builder",
+    "effort": "medium",
+    "phases": [
+      "builder",
+      "verifier"
+    ]
+  },
+  "budget_mode": "balanced",
+  "max_tier": "builder",
+  "status": "DONE",
+  "timestamps": {
+    "created": "2026-08-27T13:10:24.327704+00:00",
+    "done": "2026-08-27T13:15:14.204054+00:00"
+  },
+  "graph_context": {}
+}
