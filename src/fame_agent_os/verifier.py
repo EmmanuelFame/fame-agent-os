@@ -10,7 +10,7 @@ def run_commands(root:Path, commands:list[str]) -> Verification:
         # Commands are project-owned configuration; no shell is used: split only simple argv strings.
         import shlex
         args=shlex.split(command); p=subprocess.run(args,cwd=root,text=True,capture_output=True,check=False)
-        results.append({"command":args,"returncode":p.returncode,"stdout":p.stdout[-4000:],"stderr":p.stderr[-4000:]})
+        results.append({"command":args,"argv":args,"returncode":p.returncode,"stdout":p.stdout[-4000:],"stderr":p.stderr[-4000:]})
     return Verification(all(x["returncode"]==0 for x in results),results)
 def verify(root:Path, commands:list[str]) -> Verification:
     if not commands: return Verification(False,[{"command":[],"returncode":None,"stdout":"","stderr":"no deterministic verification commands configured"}])

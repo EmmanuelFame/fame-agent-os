@@ -19,7 +19,7 @@ from fame_agent_os.codex import CodexResult
 from fame_agent_os.mcp import serve, call, TOOLS
 from fame_agent_os.installer import codex_install, codex_status
 from fame_agent_os.scopes import resolve as resolve_scopes
-from fame_agent_os.worktree import prepare_environment
+from fame_agent_os.worktree import prepare_environment, registry as production_registry
 
 
 class VersionTests(unittest.TestCase):
@@ -150,6 +150,81 @@ class RunnerTests(unittest.TestCase):
  def test_catalog_mock(self):
   with patch("subprocess.run") as run:
    run.return_value=subprocess.CompletedProcess([],0,"gpt-x\n",""); models,note=CodexRunner().models();self.assertEqual(models,["gpt-x"]);self.assertIn("detected",note)
+
+class ProductionPreparationStateTests(unittest.TestCase):
+ def setUp(self):
+  self.d=tempfile.TemporaryDirectory(); self.root=Path(self.d.name)
+  self.state_home=str(self.root.parent/(self.root.name+"-machine-state"))
+  self.env=patch.dict("os.environ",{"XDG_STATE_HOME":self.state_home}); self.env.start()
+  self.project_root=patch("fame_agent_os.cli.project_root",return_value=self.root); self.project_root.start()
+  subprocess.run(["git","init"],cwd=self.root,check=True,capture_output=True)
+  subprocess.run(["git","config","user.email","test@example.com"],cwd=self.root,check=True)
+  subprocess.run(["git","config","user.name","Test"],cwd=self.root,check=True)
+  (self.root/"README").write_text("base"); subprocess.run(["git","add","README"],cwd=self.root,check=True)
+  subprocess.run(["git","commit","-m","base"],cwd=self.root,check=True,capture_output=True)
+  initialize(self.root,True)
+ def tearDown(self):
+  self.project_root.stop(); self.env.stop(); self.d.cleanup()
+ def configure_scope(self, preparation, verification=None):
+  config=json.loads((self.root/".fame/config.json").read_text())
+  config["verification"]["commands"]=verification or ["true"]
+  config["scopes"]=[{"name":"api","paths":["api/**"],"verification":{"required":["true"]},"preparation":{"commands":preparation}}]
+  (self.root/".fame/config.json").write_text(json.dumps(config))
+  subprocess.run(["git","add","."],cwd=self.root,check=True)
+  subprocess.run(["git","commit","-m","configure fame"],cwd=self.root,check=True,capture_output=True)
+ def task_record(self, task_id="FAME-0001"):
+  return production_registry(self.root)["tasks"][task_id]
+ def test_successful_preparation_records_success_and_not_run_verification(self):
+  self.configure_scope(["python3 -c \"from pathlib import Path; Path('prepared').write_text('ok')\""])
+  result=call(self.root,"fame_prepare_task",{"task":"Change api button label","paths":["api/x.py"]})
+  self.assertTrue(result["allowed"]); self.assertEqual(result["task_id"],"FAME-0001")
+  task=self.task_record()
+  self.assertEqual(task["status"],"PROVISIONED"); self.assertTrue(task["preparation"]["success"]); self.assertEqual(task["verification_state"],"NOT_RUN")
+  self.assertTrue((Path(task["worktree_path"])/"prepared").exists()); self.assertFalse((self.root/"prepared").exists())
+ def test_failed_preparation_is_recoverable_failed_and_preserves_worktree(self):
+  self.configure_scope(["python3 -c \"import sys; print('prep-out'); print('prep-err', file=sys.stderr); sys.exit(2)\""])
+  result=call(self.root,"fame_prepare_task",{"task":"Change api button label","paths":["api/x.py"]})
+  task=self.task_record()
+  self.assertFalse(result["allowed"]); self.assertEqual(result["status"],"FAILED"); self.assertTrue(result["recoverable"])
+  self.assertEqual(task["status"],"FAILED"); self.assertEqual(task["failure_stage"],"PREPARATION"); self.assertFalse(task["preparation"]["success"]); self.assertEqual(task["verification_state"],"NOT_RUN")
+  self.assertTrue(task["recovery"]["available"]); self.assertIn("rerun fame_prepare_task",task["recovery"]["action"]); self.assertTrue(Path(task["worktree_path"]).exists()); self.assertEqual(task["branch"],"fame/fame-0001")
+ def test_failed_preparation_persists_argv_returncode_stdout_and_stderr(self):
+  self.configure_scope(["python3 -c \"import sys; print('prep-out'); print('prep-err', file=sys.stderr); sys.exit(2)\""])
+  call(self.root,"fame_prepare_task",{"task":"Change api button label","paths":["api/x.py"]})
+  result=self.task_record()["preparation"]["results"][0]
+  self.assertEqual(result["argv"][:2],["python3","-c"]); self.assertEqual(result["returncode"],2); self.assertIn("prep-out",result["stdout"]); self.assertIn("prep-err",result["stderr"])
+ def test_failed_preparation_does_not_run_verification_or_touch_live_checkout(self):
+  class ExplodingRunner:
+   def run(self,prompt,spec,write,cwd): raise AssertionError("runner should not execute after failed preparation")
+  self.configure_scope(["python3 -c \"from pathlib import Path; Path('prepared-only-here').write_text('x'); import sys; sys.exit(2)\""])
+  with patch("fame_agent_os.cli.CodexRunner",return_value=ExplodingRunner()):
+   self.assertEqual(main(["task","Change api button label","--worktree"]),2)
+  task=self.task_record()
+  self.assertEqual(task["status"],"FAILED"); self.assertEqual(task["verification_state"],"NOT_RUN")
+  self.assertTrue((Path(task["worktree_path"])/"prepared-only-here").exists()); self.assertFalse((self.root/"prepared-only-here").exists())
+ def test_status_and_mcp_recovery_reflect_failed_preparation_from_live_checkout(self):
+  self.configure_scope(["python3 -c \"import sys; sys.exit(2)\""])
+  call(self.root,"fame_prepare_task",{"task":"Change api button label","paths":["api/x.py"]})
+  status=call(self.root,"fame_status",{})
+  self.assertEqual(status["production_tasks"][0]["status"],"FAILED"); self.assertEqual(status["production_tasks"][0]["verification_state"],"NOT_RUN")
+  self.assertEqual(status["recovery"]["interrupted_or_active"][0]["status"],"FAILED")
+ def test_failed_preparation_recovery_does_not_get_overwritten_by_interrupt_state(self):
+  self.configure_scope(["python3 -c \"import sys; sys.exit(2)\""])
+  self.assertEqual(main(["task","Change api button label","--worktree"]),2)
+  self.assertEqual(main(["task","Change api button label","--worktree"]),2)
+  task=self.task_record()
+  self.assertEqual(task["status"],"FAILED"); self.assertFalse(task["preparation"]["success"])
+ def test_interrupted_provisioning_remains_distinct_from_failed_preparation(self):
+  class FakeRunner:
+   def run(self,prompt,spec,write,cwd):
+    if write: (Path(cwd)/"builder-change.txt").write_text("isolated")
+    return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
+  self.configure_scope(["python3 -c \"from pathlib import Path; Path('prepared').write_text('ok')\""])
+  with patch("fame_agent_os.cli.CodexRunner",return_value=FakeRunner()):
+   self.assertEqual(main(["task","Change api button label","--worktree"]),0)
+  worktree=Path(self.task_record()["worktree_path"]); task_path=worktree/".fame"/"tasks"/"FAME-0001"/"TASK.json"; task=json.loads(task_path.read_text()); task["status"]="INTERRUPTED"; task_path.write_text(json.dumps(task))
+  self.assertEqual(main(["task","Change api button label","--worktree"]),2)
+  self.assertEqual(self.task_record()["status"],"INTERRUPTED")
 
 class OtherTests(unittest.TestCase):
  def test_resolver_override_and_high_only_architect(self):

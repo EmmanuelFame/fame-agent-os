@@ -13,7 +13,8 @@ from .telemetry import aggregate
 from .verifier import verify
 from .scopes import diagnose as diagnose_scopes, resolve as resolve_scopes
 from .worktree import (create as create_worktree, destination_for, next_task_id,
-                       preflight, prepare_environment, record, registry)
+                       existing_task_status, preflight, prepare_environment,
+                       record, record_preparation, recovery_action, registry)
 
 TOOLS = {
     "fame_route": {"task": "string", "budget": "string?", "max_tier": "string?", "human_approved": "boolean?"},
@@ -75,9 +76,9 @@ def status(root: Path) -> dict:
 def recover(root: Path) -> dict:
     tasks = []
     for task_id, item in registry(root).get("tasks", {}).items():
-        if item.get("status") not in ("DONE", "FAILED"):
+        if item.get("status") != "DONE" and item.get("recovery", {}).get("available"):
             tasks.append({"task_id": task_id, "status": item.get("status"), "worktree": item.get("worktree_path"),
-                          "action": "review or resume persistent worktree; Fame will not delete it"})
+                          "action": item.get("recovery", {}).get("action") or recovery_action(item)})
     return {"interrupted_or_active": tasks, "actions": ["inspect the reported worktree", "resume with fame_prepare_task or review manually", "merge only after human review"]}
 
 def prepare(root: Path, args: dict) -> dict:
@@ -92,19 +93,27 @@ def prepare(root: Path, args: dict) -> dict:
     branch = None
     if check["requires_worktree"]:
         preflight(root)
-        record(root, task_id, status="PROVISIONING", branch=f"fame/{task_id.lower()}", worktree_path=str(destination_for(root, task_id)), verification_state="NOT_RUN", recovery={"available": True})
+        if not destination_for(root, task_id).exists():
+            record(root, task_id, status="PROVISIONING", branch=f"fame/{task_id.lower()}", worktree_path=str(destination_for(root, task_id)), verification_state="NOT_RUN", recovery={"available": True})
         workspace, branch, recovered = create_worktree(root, task_id)
-        if recovered: return {"allowed": True, "recovered": True, "task_id": task_id, "workspace": str(workspace), "branch": branch, "route": route_result(root, args)}
+        if recovered:
+            current = registry(root).get("tasks", {}).get(task_id, {})
+            status = existing_task_status(root, task_id, workspace)
+            response = {"allowed": status in ("PROVISIONED", "PREPARED"), "recovered": True, "task_id": task_id,
+                        "workspace": str(workspace), "branch": branch, "status": status, "route": route_result(root, args),
+                        "recovery": current.get("recovery", {"available": True, "action": recovery_action(current)})}
+            if current.get("preparation", {}).get("success") is False:
+                response.update({"recoverable": True, "preparation": current.get("preparation"), "scopes": scope["scopes"]})
+            return response
         preparation = prepare_environment(workspace, scope["preparation"])
-        record(root, task_id, status="PREPARED" if preparation.success else "PREPARATION_FAILED", branch=branch,
-               worktree_path=str(workspace), preparation={"success": preparation.success, "results": preparation.results},
-               recovery={"available": True, "action": "review or resume persistent worktree"})
+        record_preparation(root, task_id, branch, workspace, preparation)
         if not preparation.success:
-            return {"allowed": False, "task_id": task_id, "workspace": str(workspace), "branch": branch,
-                    "recoverable": True, "preparation": {"success": False, "results": preparation.results}, "scopes": scope["scopes"]}
+            return {"allowed": False, "task_id": task_id, "workspace": str(workspace), "branch": branch, "status": "FAILED",
+                    "recoverable": True, "preparation": {"success": False, "results": preparation.results}, "scopes": scope["scopes"],
+                    "recovery": registry(root).get("tasks", {}).get(task_id, {}).get("recovery")}
     task = create_task(workspace, args["task"], route, budget, args.get("max_tier"), task_id)
     task["scope"] = scope; write_json(fame_dir(workspace)/"tasks"/task_id/"TASK.json", task)
-    if branch: record(root, task_id, status="PROVISIONED", branch=branch, worktree_path=str(workspace), verification_state="NOT_RUN", recovery={"available": True})
+    if branch: record(root, task_id, status="PROVISIONED", branch=branch, worktree_path=str(workspace), verification_state="NOT_RUN", recovery={"available": True, "action": recovery_action()})
     return {"allowed": True, "task_id": task_id, "workspace": str(workspace), "project_path": str(root), "branch": branch,
             "selected_agent": route_result(root, args)["selected_agent"], "phases": route.phases,
             "verification_policy": "deterministic-first" if route.classification in ("F1", "F2") else "strong-review-required",
@@ -133,7 +142,12 @@ def finish(root: Path, args: dict) -> dict:
     changed = [line[3:] for line in p.stdout.splitlines()]
     project_root_path = Path(args.get("project_path") or root)
     if project_config(project_root_path).get("production"):
-        record(project_root_path, task_id, status=task["status"], worktree_path=str(workspace), verification_state="PASSED" if result.success else "FAILED", verification=task["verification"], recovery={"available": True})
+        current = registry(project_root_path).get("tasks", {}).get(task_id, {})
+        if current.get("preparation", {}).get("success") is False:
+            return {"success": False, "task_id": task_id, "status": current.get("status", "FAILED"), "workspace": str(workspace),
+                    "error": "preparation failed; deterministic verification did not run", "recovery": current.get("recovery"),
+                    "preparation": current.get("preparation")}
+        record(project_root_path, task_id, status=task["status"], worktree_path=str(workspace), verification_state="PASSED" if result.success else "FAILED", verification=task["verification"], recovery={"available": True, "action": recovery_action()})
     return {"success": result.success, "task_id": task_id, "status": task["status"], "workspace": str(workspace),
             "changed_files": {"project": [p for p in changed if not p.startswith(".fame/")], "fame_metadata": [p for p in changed if p.startswith(".fame/")]},
             "verification": task["verification"], "scopes": scope["scopes"], "scope_ambiguity": scope["ambiguous"],

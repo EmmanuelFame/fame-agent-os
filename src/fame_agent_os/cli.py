@@ -15,7 +15,11 @@ from .state import fame_dir
 from .telemetry import aggregate, benchmark
 from .verifier import verify
 from .scopes import resolve as resolve_scopes
-from .worktree import create as create_worktree, next_task_id as next_worktree_task_id, preflight as production_preflight, prepare_environment, record as record_production, registry as production_registry
+from .worktree import (create as create_worktree, existing_task_status,
+                       next_task_id as next_worktree_task_id,
+                       preflight as production_preflight, prepare_environment,
+                       record as record_production, record_preparation,
+                       recovery_action, registry as production_registry)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps(value,indent=2)); return
@@ -76,24 +80,31 @@ def main(argv=None):
    print("Production project unsafe: configure deterministic verification commands for the selected scope.",file=sys.stderr);return 2
   if args.worktree:
    try:
-    # All guards run before choosing an ID or creating any persistent task resource.
+   # All guards run before choosing an ID or creating any persistent task resource.
     production_preflight(root)
     task_id=next_worktree_task_id(root)
     # Reserve only after preflight, so an interrupted git operation can reuse this ID.
-    record_production(root,task_id,status="PROVISIONING",branch=f"fame/{task_id.lower()}",worktree_path=str(root.parent/".fame-worktrees"/root.name/task_id),verification_state="NOT_RUN",recovery={"available":True,"action":"retry provisioning or review persistent worktree"})
+    if not (root.parent/".fame-worktrees"/root.name/task_id).exists():
+     record_production(root,task_id,status="PROVISIONING",branch=f"fame/{task_id.lower()}",worktree_path=str(root.parent/".fame-worktrees"/root.name/task_id),verification_state="NOT_RUN",recovery={"available":True,"action":"retry provisioning or review persistent worktree"})
     path,branch,recovered=create_worktree(root,task_id)
     if recovered:
-     task_file=path/".fame"/"tasks"/task_id/"TASK.json"; status=json.loads(task_file.read_text()).get("status","INTERRUPTED") if task_file.exists() else "INTERRUPTED"
-     record_production(root,task_id,status=status,branch=branch,worktree_path=str(path),recovery={"available":True,"action":"resume-or-review persistent worktree"})
-     emit({"task_id":task_id,"status":status,"worktree":str(path),"branch":branch,"changed_files":{"project":[],"fame_metadata":[]},"verification_result":None,"recovery":production_registry(root)["tasks"][task_id]["recovery"],"review_instructions":"Review or resume this persistent worktree manually; it was not deleted, merged, deployed, or restarted."}); return 2
+     task=production_registry(root)["tasks"].get(task_id,{})
+     status=existing_task_status(root,task_id,path)
+     record_production(root,task_id,status=status,branch=branch,worktree_path=str(path),recovery={"available":True,"action":task.get("recovery",{}).get("action") or recovery_action(task)})
+     response={"task_id":task_id,"status":status,"worktree":str(path),"branch":branch,"changed_files":{"project":[],"fame_metadata":[]},"verification_result":None,"recovery":production_registry(root)["tasks"][task_id]["recovery"],"review_instructions":"Review or resume this persistent worktree manually; it was not deleted, merged, deployed, or restarted."}
+     if task.get("preparation",{}).get("success") is False: response.update({"preparation":task.get("preparation"),"recoverable":True})
+     emit(response); return 2
     preparation=prepare_environment(path,scope["preparation"])
-    record_production(root,task_id,status="PREPARED" if preparation.success else "PREPARATION_FAILED",branch=branch,worktree_path=str(path),preparation={"success":preparation.success,"results":preparation.results},recovery={"available":True,"action":"review or resume persistent worktree"})
+    record_preparation(root,task_id,branch,path,preparation)
     if not preparation.success:
-     emit({"task_id":task_id,"status":"PREPARATION_FAILED","worktree":str(path),"branch":branch,"scopes":scope["scopes"],"preparation":{"success":False,"results":preparation.results},"recoverable":True}); return 2
+     emit({"task_id":task_id,"status":"FAILED","worktree":str(path),"branch":branch,"scopes":scope["scopes"],"preparation":{"success":False,"results":preparation.results},"recoverable":True,"recovery":production_registry(root)["tasks"][task_id]["recovery"]}); return 2
     worktree_config=merged_config(path); result=Orchestrator(path,worktree_config,runner).task(args.task,route,budget,args.max_tier,task_id=task_id)
     changed=[line[3:] for line in subprocess.run(["git","status","--porcelain"],cwd=path,text=True,capture_output=True,check=False).stdout.splitlines()]
     grouped={"project":[p for p in changed if not p.startswith(".fame/")],"fame_metadata":[p for p in changed if p.startswith(".fame/")]}
-    record_production(root,task_id,status=result.get("status"),branch=branch,worktree_path=str(path),verification_state="PASSED" if result.get("verification",{}).get("success") else "FAILED" if result.get("verification") else "NOT_RUN",verification=result.get("verification"),recovery={"available":True,"action":"review persistent worktree"})
+    task=production_registry(root)["tasks"].get(task_id,{})
+    if task.get("preparation",{}).get("success") is False:
+     emit({"task_id":task_id,"status":task.get("status","FAILED"),"worktree":str(path),"branch":branch,"preparation":task.get("preparation"),"recoverable":True,"recovery":task.get("recovery"),"review_instructions":"Fix the preparation failure in the persistent worktree, then rerun fame_prepare_task from the live checkout."}); return 2
+    record_production(root,task_id,status=result.get("status"),branch=branch,worktree_path=str(path),verification_state="PASSED" if result.get("verification",{}).get("success") else "FAILED" if result.get("verification") else "NOT_RUN",verification=result.get("verification"),recovery={"available":True,"action":recovery_action()})
     emit({"task_id":result.get("id"),"status":result.get("status"),"worktree":str(path),"branch":branch,"changed_files":grouped,"verification_result":result.get("verification"),"recovery":production_registry(root)["tasks"][task_id]["recovery"],"review_instructions":"Review changes in the persistent worktree, then merge or deploy manually. Fame never merges, deploys, restarts services, modifies the live branch, or deletes this worktree."}); return 0 if result.get("status")=="DONE" else 1
    except RuntimeError as e: print(str(e),file=sys.stderr);return 2
   try: result=Orchestrator(root,config,runner).task(args.task,route,budget,args.max_tier);emit({"task_id":result.get("id"),"status":result.get("status","started"),"scopes":result.get("scope",{}).get("scopes",[])});return 0
