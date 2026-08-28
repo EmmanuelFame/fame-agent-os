@@ -1,5 +1,9 @@
 # Fame Agent OS
 
+## v1.3.2
+
+Fame Agent OS v1.3.2 is the MCP Array Schema Hotfix. MCP clients now receive deterministic JSON Schema types, array item types, and required/optional fields for every Fame tool. Scope binding rejects malformed path arguments before processing them.
+
 ## v1.3.1
 
 Fame Agent OS v1.3.1 is the Quiet Workflow Hotfix. New requests always get a fresh monotonic task ID; failed, interrupted, and closed worktrees stay available for explicit recovery or closure, but they never hijack unrelated work. Production MCP flow now supports two-stage scope binding: provision first, bind real target paths, then verify against actual changed files.

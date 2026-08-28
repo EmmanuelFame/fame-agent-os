@@ -30,6 +30,27 @@ TOOLS = {
     "fame_recover": {},
 }
 
+_SCHEMA_TYPES = {"string": "string", "boolean": "boolean", "array": "array"}
+
+def _schema_for_token(token: str) -> dict:
+    if not isinstance(token, str):
+        raise ValueError(f"unsupported MCP schema token: {token!r}")
+    optional = token.endswith("?")
+    base = token[:-1] if optional else token
+    if base not in _SCHEMA_TYPES:
+        raise ValueError(f"unsupported MCP schema token: {token}")
+    if base == "array":
+        return {"type": "array", "items": {"type": "string"}}
+    return {"type": _SCHEMA_TYPES[base]}
+
+def _input_schema(schema: dict) -> dict:
+    properties = {name: _schema_for_token(token) for name, token in schema.items()}
+    required = [name for name, token in schema.items() if not token.endswith("?")]
+    result = {"type": "object", "properties": properties}
+    if required:
+        result["required"] = required
+    return result
+
 def route_result(root: Path, args: dict) -> dict:
     config = merged_config(root); budget = args.get("budget") or config.get("budget", config.get("default_budget", "balanced"))
     route = Router().route(args.get("task", ""), budget, args.get("max_tier"), bool(args.get("human_approved")))
@@ -111,13 +132,20 @@ def _task_workspace(root: Path, task_id: str, workspace: str | None = None, proj
 
 def bind_task_scope(root: Path, args: dict) -> dict:
     task_id = args["task_id"]
+    raw_paths = args.get("paths")
+    if not isinstance(raw_paths, list):
+        raise ValueError("paths must be an array of strings")
+    if any(not isinstance(path, str) or not path.strip() for path in raw_paths):
+        raise ValueError("paths must contain only non-empty strings")
     project_root_path = Path(args.get("project_path") or root).resolve()
     workspace = _task_workspace(root, task_id, args.get("workspace"), str(project_root_path))
     task_path = fame_dir(workspace)/"tasks"/task_id/"TASK.json"
     if not task_path.exists():
         return {"allowed": False, "task_id": task_id, "status": "FAILED", "failure_stage": "SCOPE", "error": f"task not found: {task_id}"}
     task = json.loads(task_path.read_text())
-    paths = [str(path)[2:] if str(path).startswith("./") else str(path) for path in args.get("paths", [])]
+    paths = [path[2:] if path.startswith("./") else path for path in raw_paths]
+    if any(not path for path in paths):
+        raise ValueError("paths must contain valid non-empty entries")
     scope = resolve_scopes(project_config(project_root_path), task.get("goal", ""), paths)
     task.update({"scope": scope, "bound_paths": paths, "scope_state": scope["scope_state"]})
     task_path.write_text(json.dumps(task, indent=2) + "\n")
@@ -263,7 +291,7 @@ def serve(root: Path | None = None) -> int:
         method, request_id = request.get("method"), request.get("id")
         try:
             if method == "initialize": result = {"protocolVersion": request.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "fame", "version": __import__("fame_agent_os").__version__}}
-            elif method == "tools/list": result = {"tools": [{"name": name, "description": f"Deterministic Fame operation: {name}", "inputSchema": {"type": "object", "properties": {k: {"type": "boolean" if v == "boolean?" else "array" if v == "array?" else "string"} for k, v in schema.items()}}} for name, schema in TOOLS.items()]}
+            elif method == "tools/list": result = {"tools": [{"name": name, "description": f"Deterministic Fame operation: {name}", "inputSchema": _input_schema(schema)} for name, schema in TOOLS.items()]}
             elif method == "tools/call":
                 params = request.get("params", {}); value = call(root, params.get("name", ""), params.get("arguments", {})); result = {"content": [{"type": "text", "text": json.dumps(value, separators=(",", ":"))}], "structuredContent": value}
             elif method == "ping": result = {}

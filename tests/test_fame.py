@@ -44,6 +44,54 @@ class V13IntegrationTests(unittest.TestCase):
   rows=[json.loads(x) for x in output.getvalue().splitlines()]
   self.assertEqual(rows[0]["error"]["code"],-32700); self.assertEqual(rows[1]["result"]["serverInfo"]["name"],"fame")
   self.assertEqual(len(rows[2]["result"]["tools"]),len(TOOLS)); self.assertEqual(json.loads(rows[3]["result"]["content"][0]["text"])["selected_agent"],"fame-operator")
+ def test_mcp_tools_list_emits_correct_bind_scope_schema(self):
+  output=io.StringIO(); requests=json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}})+"\n"
+  with patch("sys.stdin",io.StringIO(requests)), patch("sys.stdout",output): self.assertEqual(serve(self.root),0)
+  tools={item["name"]: item for item in json.loads(output.getvalue())["result"]["tools"]}
+  schema=tools["fame_bind_task_scope"]["inputSchema"]
+  self.assertEqual(schema["properties"]["paths"],{"type":"array","items":{"type":"string"}})
+  self.assertEqual(schema["required"],["task_id","paths"])
+  self.assertNotIn("workspace",schema["required"]); self.assertNotIn("project_path",schema["required"])
+  self.assertEqual(tools["fame_verify"]["inputSchema"]["properties"]["paths"],{"type":"array","items":{"type":"string"}})
+  self.assertNotIn("paths",tools["fame_verify"]["inputSchema"].get("required",[]))
+  self.assertEqual(tools["fame_prepare_task"]["inputSchema"]["properties"]["paths"],{"type":"array","items":{"type":"string"}})
+  self.assertNotIn("paths",tools["fame_prepare_task"]["inputSchema"].get("required",[]))
+  self.assertEqual(tools["fame_resume_task"]["inputSchema"]["properties"]["paths"],{"type":"array","items":{"type":"string"}})
+  self.assertNotIn("paths",tools["fame_resume_task"]["inputSchema"].get("required",[]))
+  self.assertEqual(tools["fame_route"]["inputSchema"]["properties"]["human_approved"]["type"],"boolean")
+  self.assertEqual(tools["fame_route"]["inputSchema"]["required"],["task"])
+  self.assertEqual(tools["fame_close_task"]["inputSchema"]["required"],["task_id","reason"])
+  self.assertEqual(tools["fame_usage"]["inputSchema"]["properties"]["task_id"],{"type":"string"})
+  self.assertNotIn("task_id",tools["fame_usage"]["inputSchema"].get("required",[]))
+ def test_mcp_tools_call_bind_scope_accepts_array_paths(self):
+  requests=[
+   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}},
+   {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}},
+   {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fame_prepare_task","arguments":{"task":"Update documentation"}}},
+   {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"fame_bind_task_scope","arguments":{"task_id":"FAME-0001","paths":["docs/PLAN.md","docs/README.md"],"workspace":str(self.root),"project_path":str(self.root)}}},
+  ]
+  output=io.StringIO(); payload="\n".join(json.dumps(request) for request in requests)+"\n"
+  with patch("sys.stdin",io.StringIO(payload)), patch("sys.stdout",output): self.assertEqual(serve(self.root),0)
+  rows=[json.loads(x) for x in output.getvalue().splitlines()]
+  self.assertEqual(rows[0]["result"]["serverInfo"]["version"],__version__)
+  self.assertEqual(rows[1]["result"]["tools"][0]["inputSchema"]["type"],"object")
+  bound=json.loads(rows[3]["result"]["content"][0]["text"])
+  self.assertTrue(bound["allowed"]); self.assertEqual(bound["status"],"READY")
+  task=json.loads((self.root/".fame/tasks/FAME-0001/TASK.json").read_text())
+  self.assertEqual(task["bound_paths"],["docs/PLAN.md","docs/README.md"])
+ def test_mcp_schema_helper_rejects_unknown_tokens(self):
+  from fame_agent_os.mcp import _input_schema
+  with self.assertRaises(ValueError): _input_schema({"future":"number"})
+ def test_bind_scope_accepts_multiple_paths_without_character_splitting(self):
+  config=json.loads((self.root/".fame/config.json").read_text()); config["scopes"]=[{"name":"docs","paths":["docs/**"],"verification":{"required":["true"]}}]; (self.root/".fame/config.json").write_text(json.dumps(config))
+  route=Router().route("Update documentation"); task=create_task(self.root,"Update documentation",route,"balanced",None)
+  (self.root/"docs").mkdir(); (self.root/"docs"/"PLAN.md").write_text("plan"); (self.root/"docs"/"README.md").write_text("readme")
+  result=call(self.root,"fame_bind_task_scope",{"task_id":task["id"],"paths":["docs/PLAN.md","docs/README.md"],"workspace":str(self.root),"project_path":str(self.root)})
+  self.assertTrue(result["allowed"]); self.assertEqual(json.loads((self.root/".fame/tasks"/task["id"] / "TASK.json").read_text())["bound_paths"],["docs/PLAN.md","docs/README.md"])
+ def test_bind_scope_rejects_plain_string_paths(self):
+  route=Router().route("Update documentation"); task=create_task(self.root,"Update documentation",route,"balanced",None)
+  with self.assertRaisesRegex(ValueError,"paths must be an array"):
+   call(self.root,"fame_bind_task_scope",{"task_id":task["id"],"paths":"docs/PLAN.md","workspace":str(self.root),"project_path":str(self.root)})
  def test_blocked_mcp_prepare_creates_no_task(self):
   result=call(self.root,"fame_prepare_task",{"task":"destructive financial migration with unresolved accounting invariants","max_tier":"builder"})
   self.assertFalse(result["allowed"]); self.assertFalse((self.root/".fame/tasks/FAME-0001").exists())
