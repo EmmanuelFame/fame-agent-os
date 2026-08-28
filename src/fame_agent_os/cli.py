@@ -6,7 +6,8 @@ from .codex import CodexRunner
 from .config import project_root, merged_config, project_config
 from .graph import GraphAdapter
 from .installer import initialize, codex_install, codex_status
-from .mcp import serve as serve_mcp, doctor as mcp_doctor
+from .mcp import (serve as serve_mcp, doctor as mcp_doctor, status as mcp_status,
+                  recover as mcp_recover, resume_task as mcp_resume_task)
 from .models import ModelResolver, Role
 from .orchestrator import Orchestrator
 from .router import Router
@@ -19,7 +20,8 @@ from .worktree import (create as create_worktree, existing_task_status,
                        next_task_id as next_worktree_task_id,
                        preflight as production_preflight, prepare_environment,
                        record as record_production, record_preparation,
-                       recovery_action, registry as production_registry)
+                       recovery_action, registry as production_registry,
+                       inspect_task, close_task)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps(value,indent=2)); return
@@ -37,6 +39,10 @@ def parser():
  v=sub.add_parser("verify");v.add_argument("--json",action="store_true");v.add_argument("--task",default="");v.add_argument("--path",dest="paths",action="append",default=[])
  s=sub.add_parser("self-check", help="validate Fame project state without invoking Codex");s.add_argument("--json",action="store_true")
  sub.add_parser("status")
+ sub.add_parser("recover")
+ i=sub.add_parser("inspect"); i.add_argument("task_id")
+ rs=sub.add_parser("resume"); rs.add_argument("task_id"); rs.add_argument("--path",dest="paths",action="append",default=[])
+ cl=sub.add_parser("close"); cl.add_argument("task_id"); cl.add_argument("--reason",required=True)
  u=sub.add_parser("usage");u.add_argument("--task");u.add_argument("--json",action="store_true")
  b=sub.add_parser("benchmark",help="compare context-token telemetry between two tasks");b.add_argument("--before",required=True);b.add_argument("--after",required=True);b.add_argument("--json",action="store_true")
  g=sub.add_parser("graph");gsub=g.add_subparsers(dest="graph_command",required=True);gsub.add_parser("status");gsub.add_parser("update")
@@ -46,6 +52,13 @@ def parser():
  csub.add_parser("status", help="diagnose project-scoped Fame Codex integration")
  return p
 def main(argv=None):
+ def summary(payload):
+  if payload.get("status")=="DONE":
+   changed=payload.get("changed_files",{}).get("project",[])
+   return f"DONE · {payload.get('task_id')} · Changed: {len(changed)} files · Verification: passed · Worktree retained"
+  if payload.get("status") in ("FAILED","CLOSED") or payload.get("failure_stage"):
+   return f"BLOCKED · {payload.get('task_id','FAME-????')} · {payload.get('failure_stage') or payload.get('status')}"
+  return None
  args=parser().parse_args(argv); root=project_root(); config=merged_config(root); runner=CodexRunner(config.get("codex_binary","codex")); graph=GraphAdapter(config.get("graphify_binary","graphify"))
  if args.command=="mcp": return serve_mcp(root)
  if args.command=="codex":
@@ -113,9 +126,15 @@ def main(argv=None):
   scope=resolve_scopes(project_config(root),args.task,args.paths); result=verify(root,scope["commands"]); emit({"success":result.success,"results":result.results,"scopes":scope["scopes"],"scope_ambiguity":scope["ambiguous"],"candidate_scopes":scope["candidates"],"commands_selected":scope["commands"],"commands_skipped":scope["skipped_commands"],"optional_checks":scope["optional_checks"]},args.json);return 0 if result.success else 1
  if args.command=="self-check":
   result=self_check(root); emit({"success":result.success,"errors":result.errors},args.json);return 0 if result.success else 1
- if args.command=="status":
-  state=json.loads((fame_dir(root)/"state"/"CURRENT.json").read_text()) if (fame_dir(root)/"state"/"CURRENT.json").exists() else {"status":"NOT_INITIALIZED"}
-  state["production_tasks"]=list(production_registry(root).get("tasks",{}).values()); emit(state);return 0
+ if args.command=="status": emit(mcp_status(root)); return 0
+ if args.command=="recover": emit(mcp_recover(root)); return 0
+ if args.command=="inspect": emit(inspect_task(root,args.task_id)); return 0
+ if args.command=="resume":
+  payload=mcp_resume_task(root,{"task_id":args.task_id,"paths":args.paths,"project_path":str(root)})
+  emit(summary(payload) or payload); return 0 if payload.get("allowed") else 2
+ if args.command=="close":
+  payload={"task_id":args.task_id, "status":"CLOSED", "closure":close_task(root,args.task_id,args.reason).get("closure")}
+  emit(summary(payload) or payload); return 0
  if args.command=="usage": emit(aggregate(fame_dir(root)/"logs"/"runs.jsonl",args.task),args.json);return 0
  if args.command=="benchmark": emit(benchmark(fame_dir(root)/"logs"/"runs.jsonl",args.before,args.after),args.json);return 0
  return 1

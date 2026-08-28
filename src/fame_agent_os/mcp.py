@@ -14,14 +14,19 @@ from .verifier import verify
 from .scopes import diagnose as diagnose_scopes, resolve as resolve_scopes
 from .worktree import (create as create_worktree, destination_for, next_task_id,
                        existing_task_status, preflight, prepare_environment,
-                       record, record_preparation, recovery_action, registry)
+                       record, record_preparation, recovery_action, registry,
+                       inspect_task, close_task, update_task_artifact_status)
 
 TOOLS = {
     "fame_route": {"task": "string", "budget": "string?", "max_tier": "string?", "human_approved": "boolean?"},
     "fame_doctor": {}, "fame_preflight": {"task": "string", "budget": "string?", "max_tier": "string?", "human_approved": "boolean?"},
     "fame_status": {}, "fame_verify": {"task": "string?", "paths": "array?"}, "fame_usage": {"task_id": "string?"},
     "fame_prepare_task": {"task": "string", "paths": "array?", "budget": "string?", "max_tier": "string?", "human_approved": "boolean?"},
+    "fame_bind_task_scope": {"task_id": "string", "paths": "array", "workspace": "string?", "project_path": "string?"},
     "fame_finish_task": {"task_id": "string", "workspace": "string?", "project_path": "string?", "success": "boolean?"},
+    "fame_resume_task": {"task_id": "string", "paths": "array?", "workspace": "string?", "project_path": "string?"},
+    "fame_close_task": {"task_id": "string", "reason": "string"},
+    "fame_inspect_task": {"task_id": "string"},
     "fame_recover": {},
 }
 
@@ -60,26 +65,87 @@ def _git_clean(root: Path) -> bool:
     return p.returncode == 0 and not p.stdout.strip()
 
 def preflight_result(root: Path, args: dict) -> dict:
-    route = route_result(root, args); config = project_config(root); production = bool(config.get("production", False))
+    route = route_result(root, args); config = project_config(root); production = bool(config.get("production", False)); scope = resolve_scopes(config, args.get("task", ""), args.get("paths", []))
     problems = []
     if not fame_dir(root).is_dir(): problems.append("project is not initialized; run fame init")
     if route["blocked"]: problems.append("route blocked by max-tier")
     if route["classification"] == "F5" and not args.get("human_approved"): problems.append("F5 requires explicit human approval")
-    if production and not resolve_scopes(config, args.get("task", ""), args.get("paths", []))["commands"]: problems.append("production verification commands are not configured for selected scope")
+    if production and scope["scope_state"] == "resolved" and not scope["commands"]: problems.append("production verification commands are not configured for selected scope")
     if production and not _git_clean(root): problems.append("production live checkout is not clean")
-    return {"allowed": not problems, "requires_worktree": production, "problems": problems, "route": route}
+    return {"allowed": not problems, "requires_worktree": production, "problems": problems, "route": route,
+            "scope_state": scope["scope_state"], "provisional_scopes": scope["scopes"] or scope["candidates"], "workspace": str(root)}
+
+def _task_groups(root: Path) -> dict:
+    groups = {"active": [], "recoverable": [], "closed": [], "history": []}
+    for _, item in sorted(registry(root).get("tasks", {}).items()):
+        status = item.get("status")
+        if status == "DONE":
+            groups["history"].append(item)
+        elif status == "CLOSED" or not item.get("recovery", {}).get("available", True):
+            groups["closed"].append(item)
+        elif status in ("PROVISIONING", "PROVISIONED", "PREPARED", "READY"):
+            groups["active"].append(item)
+        else:
+            groups["recoverable"].append(item)
+    return groups
 
 def status(root: Path) -> dict:
     current = __import__("json").loads((fame_dir(root)/"state"/"CURRENT.json").read_text()) if (fame_dir(root)/"state"/"CURRENT.json").exists() else {"status": "NOT_INITIALIZED"}
-    return {"local_task": current, "production_tasks": list(registry(root).get("tasks", {}).values()), "recovery": recover(root)}
+    return {"local_task": current, "production_tasks": list(registry(root).get("tasks", {}).values()), "groups": _task_groups(root), "recovery": recover(root)}
 
 def recover(root: Path) -> dict:
     tasks = []
     for task_id, item in registry(root).get("tasks", {}).items():
-        if item.get("status") != "DONE" and item.get("recovery", {}).get("available"):
+        if item.get("status") not in ("DONE", "CLOSED") and item.get("recovery", {}).get("available"):
             tasks.append({"task_id": task_id, "status": item.get("status"), "worktree": item.get("worktree_path"),
                           "action": item.get("recovery", {}).get("action") or recovery_action(item)})
-    return {"interrupted_or_active": tasks, "actions": ["inspect the reported worktree", "resume with fame_prepare_task or review manually", "merge only after human review"]}
+    return {"recoverable": tasks, "interrupted_or_active": tasks,
+            "actions": ["inspect the reported worktree", "resume with fame_resume_task", "merge only after human review"]}
+
+def _task_workspace(root: Path, task_id: str, workspace: str | None = None, project_path: str | None = None) -> Path:
+    if workspace:
+        return Path(workspace).resolve()
+    project_root_path = Path(project_path or root).resolve()
+    recorded = registry(project_root_path).get("tasks", {}).get(task_id, {}).get("worktree_path")
+    return Path(recorded or destination_for(project_root_path, task_id)).resolve()
+
+def bind_task_scope(root: Path, args: dict) -> dict:
+    task_id = args["task_id"]
+    project_root_path = Path(args.get("project_path") or root).resolve()
+    workspace = _task_workspace(root, task_id, args.get("workspace"), str(project_root_path))
+    task_path = fame_dir(workspace)/"tasks"/task_id/"TASK.json"
+    if not task_path.exists():
+        return {"allowed": False, "task_id": task_id, "status": "FAILED", "failure_stage": "SCOPE", "error": f"task not found: {task_id}"}
+    task = json.loads(task_path.read_text())
+    paths = [str(path)[2:] if str(path).startswith("./") else str(path) for path in args.get("paths", [])]
+    scope = resolve_scopes(project_config(project_root_path), task.get("goal", ""), paths)
+    task.update({"scope": scope, "bound_paths": paths, "scope_state": scope["scope_state"]})
+    task_path.write_text(json.dumps(task, indent=2) + "\n")
+    if not scope["scopes"] and not scope["commands"]:
+        record(project_root_path, task_id, status="PROVISIONED", branch=registry(project_root_path).get("tasks", {}).get(task_id, {}).get("branch"),
+               worktree_path=str(workspace), verification_state="NOT_RUN", recovery={"available": True, "action": recovery_action()},
+               scope_state="pending", provisional_scopes=scope["candidates"], bound_paths=paths)
+        return {"allowed": False, "task_id": task_id, "status": "PROVISIONED", "failure_stage": "SCOPE", "scope_state": "pending",
+                "candidate_scopes": scope["candidates"], "unmatched_paths": scope["unmatched_paths"]}
+    current = registry(project_root_path).get("tasks", {}).get(task_id, {})
+    if project_config(project_root_path).get("production") and scope["preparation"] and current.get("preparation", {}).get("success") is not True:
+        prep_result = prepare_environment(workspace, scope["preparation"])
+        record_preparation(project_root_path, task_id, current.get("branch") or f"fame/{task_id.lower()}", workspace, prep_result)
+        if not prep_result.success:
+            update_task_artifact_status(workspace, task_id, "FAILED", scope=scope, bound_paths=paths, scope_state="resolved")
+            return {"allowed": False, "task_id": task_id, "workspace": str(workspace), "status": "FAILED", "recoverable": True,
+                    "failure_stage": registry(project_root_path).get("tasks", {}).get(task_id, {}).get("failure_stage", "PREPARATION"),
+                    "preparation": {"success": False, "results": prep_result.results}, "scopes": scope["scopes"],
+                    "recovery": registry(project_root_path).get("tasks", {}).get(task_id, {}).get("recovery")}
+        current = registry(project_root_path).get("tasks", {}).get(task_id, {})
+    update_task_artifact_status(workspace, task_id, "READY", scope=scope, bound_paths=paths, scope_state="resolved")
+    if current:
+        record(project_root_path, task_id, status="READY", branch=current.get("branch"), worktree_path=str(workspace), verification_state="NOT_RUN",
+               scope_state="resolved", bound_paths=paths, preparation=current.get("preparation"),
+               recovery={"available": True, "action": recovery_action(current)})
+    return {"allowed": True, "task_id": task_id, "workspace": str(workspace), "status": "READY", "scope_state": "resolved",
+            "scopes": scope["scopes"], "verification_commands": scope["commands"], "optional_checks": scope["optional_checks"],
+            "preparation": {"configured": bool(scope["preparation"]), "commands": scope["preparation"]}}
 
 def prepare(root: Path, args: dict) -> dict:
     check = preflight_result(root, args)
@@ -97,30 +163,41 @@ def prepare(root: Path, args: dict) -> dict:
             record(root, task_id, status="PROVISIONING", branch=f"fame/{task_id.lower()}", worktree_path=str(destination_for(root, task_id)), verification_state="NOT_RUN", recovery={"available": True})
         workspace, branch, recovered = create_worktree(root, task_id)
         if recovered:
-            current = registry(root).get("tasks", {}).get(task_id, {})
             status = existing_task_status(root, task_id, workspace)
-            response = {"allowed": status in ("PROVISIONED", "PREPARED"), "recovered": True, "task_id": task_id,
-                        "workspace": str(workspace), "branch": branch, "status": status, "route": route_result(root, args),
-                        "recovery": current.get("recovery", {"available": True, "action": recovery_action(current)})}
-            if current.get("preparation", {}).get("success") is False:
-                response.update({"recoverable": True, "preparation": current.get("preparation"), "scopes": scope["scopes"]})
-            return response
-        preparation = prepare_environment(workspace, scope["preparation"])
-        record_preparation(root, task_id, branch, workspace, preparation)
-        if not preparation.success:
-            return {"allowed": False, "task_id": task_id, "workspace": str(workspace), "branch": branch, "status": "FAILED",
-                    "recoverable": True, "preparation": {"success": False, "results": preparation.results}, "scopes": scope["scopes"],
-                    "recovery": registry(root).get("tasks", {}).get(task_id, {}).get("recovery")}
+            return {"allowed": False, "task_id": task_id, "workspace": str(workspace), "branch": branch, "status": status,
+                    "error": "new requests never resume old tasks automatically; use fame_resume_task", "recoverable": True}
     task = create_task(workspace, args["task"], route, budget, args.get("max_tier"), task_id)
-    task["scope"] = scope; write_json(fame_dir(workspace)/"tasks"/task_id/"TASK.json", task)
-    if branch: record(root, task_id, status="PROVISIONED", branch=branch, worktree_path=str(workspace), verification_state="NOT_RUN", recovery={"available": True, "action": recovery_action()})
+    task["scope"] = scope; task["scope_state"] = scope["scope_state"]; write_json(fame_dir(workspace)/"tasks"/task_id/"TASK.json", task)
+    if branch: record(root, task_id, status="PROVISIONED", branch=branch, worktree_path=str(workspace), verification_state="NOT_RUN",
+                      recovery={"available": True, "action": recovery_action()}, scope_state=scope["scope_state"],
+                      provisional_scopes=scope["scopes"] or scope["candidates"])
+    if args.get("paths"):
+        return bind_task_scope(root, {"task_id": task_id, "paths": args["paths"], "workspace": str(workspace), "project_path": str(root)})
     return {"allowed": True, "task_id": task_id, "workspace": str(workspace), "project_path": str(root), "branch": branch,
             "selected_agent": route_result(root, args)["selected_agent"], "phases": route.phases,
             "verification_policy": "deterministic-first" if route.classification in ("F1", "F2") else "strong-review-required",
             "acceptance": task["acceptance_criteria"], "route": route_result(root, args),
             "scopes": scope["scopes"], "scope_ambiguity": scope["ambiguous"], "candidate_scopes": scope["candidates"],
+            "scope_state": scope["scope_state"], "provisional_scopes": scope["scopes"] or scope["candidates"],
             "verification_commands": scope["commands"], "optional_checks": scope["optional_checks"],
             "preparation": {"configured": bool(scope["preparation"]), "commands": scope["preparation"]}}
+
+def resume_task(root: Path, args: dict) -> dict:
+    task_id = args["task_id"]
+    info = inspect_task(root, task_id)
+    if not info["registry"] and not info["task"]:
+        return {"allowed": False, "task_id": task_id, "status": "FAILED", "failure_stage": "SCOPE", "error": f"unknown task: {task_id}"}
+    if info["status"] == "CLOSED":
+        return {"allowed": False, "task_id": task_id, "status": "CLOSED", "error": "closed tasks cannot be resumed"}
+    response = {"allowed": True, "task_id": task_id, "workspace": info["workspace"], "branch": info["branch"], "status": info["status"],
+                "recoverable": True, "recovery": info["registry"].get("recovery")}
+    if args.get("paths"):
+        response.update(bind_task_scope(root, args))
+    return response
+
+def close(root: Path, args: dict) -> dict:
+    task = close_task(root, args["task_id"], args["reason"])
+    return {"success": True, "task_id": args["task_id"], "status": task["status"], "closure": task.get("closure"), "recoverable": False}
 
 def finish(root: Path, args: dict) -> dict:
     workspace = Path(args.get("workspace") or root).resolve(); task_id = args["task_id"]
@@ -168,7 +245,11 @@ def call(root: Path, name: str, args: dict) -> dict:
         return {"success": result.success, "results": result.results, "scopes": scope["scopes"], "scope_ambiguity": scope["ambiguous"], "candidate_scopes": scope["candidates"], "commands_selected": scope["commands"], "commands_skipped": scope["skipped_commands"], "optional_checks": scope["optional_checks"]}
     if name == "fame_usage": return aggregate(fame_dir(root)/"logs"/"runs.jsonl", args.get("task_id"))
     if name == "fame_prepare_task": return prepare(root, args)
+    if name == "fame_bind_task_scope": return bind_task_scope(root, args)
     if name == "fame_finish_task": return finish(root, args)
+    if name == "fame_resume_task": return resume_task(root, args)
+    if name == "fame_close_task": return close(root, args)
+    if name == "fame_inspect_task": return inspect_task(root, args["task_id"])
     if name == "fame_recover": return recover(root)
     raise ValueError(f"unknown Fame MCP tool: {name}")
 

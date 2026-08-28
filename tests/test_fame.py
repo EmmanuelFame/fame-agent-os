@@ -68,7 +68,8 @@ class ScopeTests(unittest.TestCase):
  def config(self):
   return {"verification":{"commands":["legacy"]},"scopes":[
    {"name":"frontend","paths":["web/**"],"priority":10,"verification":{"required":["frontend-test","shared"],"optional":["frontend-build"],"optional_when_paths":["web/package.json"]}},
-   {"name":"backend","paths":["api/**"],"verification":{"required":["backend-test","shared"]},"preparation":{"commands":["true"]},"production_sensitive":True}]}
+   {"name":"backend","paths":["api/**"],"verification":{"required":["backend-test","shared"]},"preparation":{"commands":["true"]},"production_sensitive":True},
+   {"name":"app","paths":["app/**"],"verification":{"required":["app-test"]}}]}
  def test_legacy_single_project_config_still_works(self):
   result=resolve_scopes({"verification":{"commands":["legacy-test"]}})
   self.assertEqual(result["commands"],["legacy-test"]); self.assertFalse(result["ambiguous"])
@@ -78,15 +79,30 @@ class ScopeTests(unittest.TestCase):
  def test_multi_scope_deduplicates_and_orders_commands(self):
   result=resolve_scopes(self.config(),"change web and api",["web/a.ts","api/a.py"])
   self.assertEqual(result["scopes"],["frontend","backend"]); self.assertEqual(result["commands"],["frontend-test","shared","backend-test"])
+ def test_strict_scope_matching_does_not_use_substrings(self):
+  self.assertEqual(resolve_scopes(self.config(),"change application behavior")["scopes"],[])
+  self.assertEqual(resolve_scopes(self.config(),"apply the config")["scopes"],[])
+  self.assertEqual(resolve_scopes(self.config(),"what happened here")["scopes"],[])
+  self.assertEqual(resolve_scopes(self.config(),"change app/Models/User.php")["scopes"],["app"])
  def test_ambiguous_task_returns_candidates(self):
   result=resolve_scopes(self.config(),"Update shared release notes")
-  self.assertTrue(result["ambiguous"]); self.assertEqual(result["candidates"],["frontend","backend"]); self.assertEqual(result["commands"],[])
+  self.assertTrue(result["ambiguous"]); self.assertEqual(result["candidates"],["frontend","backend","app"]); self.assertEqual(result["commands"],[])
  def test_optional_check_requires_explicit_policy_or_relevant_path(self):
   self.assertEqual(resolve_scopes(self.config(),"fix web button")["optional_checks"],["frontend-build"])
   self.assertIn("frontend-build",resolve_scopes(self.config(),"fix web manifest",["web/package.json"])["commands"])
  def test_missing_dependencies_do_not_invent_preparation(self):
   result=resolve_scopes(self.config(),"fix web button")
   self.assertEqual(result["preparation"],[])
+ def test_built_in_documentation_and_control_plane_fallbacks(self):
+  docs = resolve_scopes(self.config(),"Create docs/PLAN.md",["docs/PLAN.md"])
+  control = resolve_scopes(self.config(),"Fix .fame/config.json",[".fame/config.json"])
+  mixed = resolve_scopes(self.config(),"Misleading prose about application",[".fame/config.json","app/Models/User.php"])
+  self.assertEqual(docs["scopes"],["documentation"]); self.assertEqual(docs["commands"],["git diff --check"])
+  self.assertEqual(control["scopes"],["fame-control-plane"]); self.assertEqual(control["commands"][0],"git diff --check")
+  self.assertEqual(mixed["scopes"],["app","fame-control-plane"]); self.assertEqual(mixed["commands"][0],"app-test")
+ def test_changed_paths_override_misleading_task_prose(self):
+  result = resolve_scopes(self.config(),"Change application behavior",["docs/PLAN.md"])
+  self.assertEqual(result["scopes"],["documentation"]); self.assertEqual(result["commands"],["git diff --check"])
  def test_preparation_only_runs_in_the_given_worktree_and_failure_is_reported(self):
   with tempfile.TemporaryDirectory() as d:
    live=Path(d)/"live"; worktree=Path(d)/"worktree"; live.mkdir(); worktree.mkdir()
@@ -179,7 +195,7 @@ class ProductionPreparationStateTests(unittest.TestCase):
   result=call(self.root,"fame_prepare_task",{"task":"Change api button label","paths":["api/x.py"]})
   self.assertTrue(result["allowed"]); self.assertEqual(result["task_id"],"FAME-0001")
   task=self.task_record()
-  self.assertEqual(task["status"],"PROVISIONED"); self.assertTrue(task["preparation"]["success"]); self.assertEqual(task["verification_state"],"NOT_RUN")
+  self.assertEqual(task["status"],"READY"); self.assertTrue(task["preparation"]["success"]); self.assertEqual(task["verification_state"],"NOT_RUN")
   self.assertTrue((Path(task["worktree_path"])/"prepared").exists()); self.assertFalse((self.root/"prepared").exists())
  def test_failed_preparation_is_recoverable_failed_and_preserves_worktree(self):
   self.configure_scope(["python3 -c \"import sys; print('prep-out'); print('prep-err', file=sys.stderr); sys.exit(2)\""])
@@ -207,24 +223,40 @@ class ProductionPreparationStateTests(unittest.TestCase):
   call(self.root,"fame_prepare_task",{"task":"Change api button label","paths":["api/x.py"]})
   status=call(self.root,"fame_status",{})
   self.assertEqual(status["production_tasks"][0]["status"],"FAILED"); self.assertEqual(status["production_tasks"][0]["verification_state"],"NOT_RUN")
-  self.assertEqual(status["recovery"]["interrupted_or_active"][0]["status"],"FAILED")
+  self.assertEqual(status["recovery"]["recoverable"][0]["status"],"FAILED")
  def test_failed_preparation_recovery_does_not_get_overwritten_by_interrupt_state(self):
   self.configure_scope(["python3 -c \"import sys; sys.exit(2)\""])
   self.assertEqual(main(["task","Change api button label","--worktree"]),2)
   self.assertEqual(main(["task","Change api button label","--worktree"]),2)
   task=self.task_record()
   self.assertEqual(task["status"],"FAILED"); self.assertFalse(task["preparation"]["success"])
+ def test_prepare_can_leave_scope_pending_then_bind_explicitly(self):
+  self.configure_scope(["python3 -c \"from pathlib import Path; Path('prepared').write_text('ok')\""])
+  prepared = call(self.root,"fame_prepare_task",{"task":"Fix checkout validation"})
+  self.assertTrue(prepared["allowed"]); self.assertEqual(prepared["scope_state"],"pending")
+  bound = call(self.root,"fame_bind_task_scope",{"task_id":prepared["task_id"],"paths":["api/x.py"],"workspace":prepared["workspace"],"project_path":str(self.root)})
+  self.assertTrue(bound["allowed"]); self.assertEqual(bound["status"],"READY"); self.assertEqual(bound["scopes"],["api"])
+  self.assertTrue((Path(bound["workspace"])/"prepared").exists())
+ def test_resume_and_close_are_explicit(self):
+  self.configure_scope(["python3 -c \"import sys; sys.exit(2)\""])
+  prepared = call(self.root,"fame_prepare_task",{"task":"Change api button label","paths":["api/x.py"]})
+  resumed = call(self.root,"fame_resume_task",{"task_id":prepared["task_id"]})
+  closed = call(self.root,"fame_close_task",{"task_id":prepared["task_id"],"reason":"superseded"})
+  self.assertTrue(resumed["allowed"]); self.assertEqual(resumed["task_id"],prepared["task_id"])
+  self.assertTrue(closed["success"]); self.assertEqual(production_registry(self.root)["tasks"][prepared["task_id"]]["status"],"CLOSED")
  def test_interrupted_provisioning_remains_distinct_from_failed_preparation(self):
   class FakeRunner:
    def run(self,prompt,spec,write,cwd):
-    if write: (Path(cwd)/"builder-change.txt").write_text("isolated")
+    if write:
+     (Path(cwd)/"api").mkdir(exist_ok=True)
+     (Path(cwd)/"api"/"x.py").write_text("isolated")
     return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
   self.configure_scope(["python3 -c \"from pathlib import Path; Path('prepared').write_text('ok')\""])
   with patch("fame_agent_os.cli.CodexRunner",return_value=FakeRunner()):
    self.assertEqual(main(["task","Change api button label","--worktree"]),0)
-  worktree=Path(self.task_record()["worktree_path"]); task_path=worktree/".fame"/"tasks"/"FAME-0001"/"TASK.json"; task=json.loads(task_path.read_text()); task["status"]="INTERRUPTED"; task_path.write_text(json.dumps(task))
-  self.assertEqual(main(["task","Change api button label","--worktree"]),2)
-  self.assertEqual(self.task_record()["status"],"INTERRUPTED")
+   worktree=Path(self.task_record()["worktree_path"]); task_path=worktree/".fame"/"tasks"/"FAME-0001"/"TASK.json"; task=json.loads(task_path.read_text()); task["status"]="INTERRUPTED"; task_path.write_text(json.dumps(task))
+   self.assertEqual(main(["task","Change api button label","--worktree"]),0)
+  self.assertEqual(self.task_record("FAME-0001")["status"],"DONE"); self.assertEqual(self.task_record("FAME-0002")["status"],"DONE")
 
 class OtherTests(unittest.TestCase):
  def test_resolver_override_and_high_only_architect(self):
@@ -267,15 +299,17 @@ class OtherTests(unittest.TestCase):
  def test_production_worktree_runs_task_without_changing_live_checkout(self):
   class FakeRunner:
    def run(self,prompt,spec,write,cwd):
-    if write: (Path(cwd)/"builder-change.txt").write_text("isolated")
+    if write:
+     (Path(cwd)/"api").mkdir(exist_ok=True)
+     (Path(cwd)/"api"/"x.py").write_text("isolated")
     return CodexResult(0,"{}","",0.01,{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"raw":[]})
   with tempfile.TemporaryDirectory() as d, patch.dict("os.environ",{"XDG_STATE_HOME":str(Path(d).parent/(Path(d).name+"-machine-state"))}), patch("fame_agent_os.cli.project_root",return_value=Path(d)), patch("fame_agent_os.cli.CodexRunner",return_value=FakeRunner()):
    root=Path(d); subprocess.run(["git","init"],cwd=root,check=True,capture_output=True); subprocess.run(["git","config","user.email","test@example.com"],cwd=root,check=True); subprocess.run(["git","config","user.name","Test"],cwd=root,check=True)
    (root/"README").write_text("base"); subprocess.run(["git","add","README"],cwd=root,check=True); subprocess.run(["git","commit","-m","base"],cwd=root,check=True,capture_output=True)
    initialize(root,True); config=json.loads((root/".fame/config.json").read_text()); config["verification"]["commands"]=["true"]; config["scopes"]=[{"name":"api","paths":["api/**"],"verification":{"required":["true"]},"preparation":{"commands":["python3 -c \"from pathlib import Path; Path('prepared').write_text('ok')\""]}}]; (root/".fame/config.json").write_text(json.dumps(config)); subprocess.run(["git","add","."],cwd=root,check=True); subprocess.run(["git","commit","-m","initialize fame"],cwd=root,check=True,capture_output=True)
    self.assertEqual(main(["task","Change api button label","--worktree"]),0)
-   worktree=root.parent/".fame-worktrees"/root.name/"FAME-0001"; self.assertTrue(worktree.exists()); self.assertTrue((worktree/"prepared").exists()); self.assertFalse((root/"prepared").exists()); self.assertTrue((worktree/"builder-change.txt").exists()); self.assertFalse((root/"builder-change.txt").exists()); self.assertEqual(subprocess.run(["git","branch","--show-current"],cwd=root,text=True,capture_output=True,check=True).stdout.strip(),"master")
-   task_path=worktree/".fame/tasks/FAME-0001/TASK.json"; task=json.loads(task_path.read_text()); task["status"]="INTERRUPTED"; task_path.write_text(json.dumps(task)); self.assertEqual(main(["task","Change api button label","--worktree"]),2); self.assertFalse((worktree.parent/"FAME-0002").exists())
+   worktree=root.parent/".fame-worktrees"/root.name/"FAME-0001"; self.assertTrue(worktree.exists()); self.assertTrue((worktree/"prepared").exists()); self.assertFalse((root/"prepared").exists()); self.assertTrue((worktree/"api"/"x.py").exists()); self.assertFalse((root/"api"/"x.py").exists()); self.assertEqual(subprocess.run(["git","branch","--show-current"],cwd=root,text=True,capture_output=True,check=True).stdout.strip(),"master")
+   task_path=worktree/".fame/tasks/FAME-0001/TASK.json"; task=json.loads(task_path.read_text()); task["status"]="INTERRUPTED"; task_path.write_text(json.dumps(task)); self.assertEqual(main(["task","Change api button label","--worktree"]),0); self.assertTrue((worktree.parent/"FAME-0002").exists())
  def test_production_preflight_rejections_create_no_worktree(self):
   with tempfile.TemporaryDirectory() as d, patch.dict("os.environ",{"XDG_STATE_HOME":str(Path(d).parent/(Path(d).name+"-machine-state"))}), patch("fame_agent_os.cli.project_root",return_value=Path(d)):
    root=Path(d); subprocess.run(["git","init"],cwd=root,check=True,capture_output=True); initialize(root,True)
@@ -294,3 +328,9 @@ class OtherTests(unittest.TestCase):
  def test_production_doctor_requires_verification_commands(self):
   with tempfile.TemporaryDirectory() as d, patch("fame_agent_os.cli.project_root",return_value=Path(d)):
    root=Path(d);(root/".git").mkdir();initialize(root,True);self.assertEqual(main(["doctor"]),2)
+ def test_control_plane_verification_catches_invalid_json(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); subprocess.run(["git","init"],cwd=root,check=True,capture_output=True); initialize(root)
+   (root/".fame/config.json").write_text("{")
+   result = call(root,"fame_verify",{"paths":[".fame/config.json"]})
+   self.assertFalse(result["success"]); self.assertEqual(result["scopes"],["fame-control-plane"])

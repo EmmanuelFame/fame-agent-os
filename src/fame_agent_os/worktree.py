@@ -8,6 +8,12 @@ def branch_for(task_id: str) -> str: return f"fame/{task_id.lower()}"
 def destination_for(root: Path, task_id: str) -> Path: return root.parent/".fame-worktrees"/root.name/task_id
 def _now() -> str: return datetime.now(timezone.utc).isoformat()
 def _registry_task(root: Path, task_id: str) -> dict: return registry(root).get("tasks", {}).get(task_id, {})
+def _load_json(path: Path) -> dict:
+    try: return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError): return {}
+def _task_number(task_id: str) -> int | None:
+    try: return int(task_id[5:]) if task_id.startswith("FAME-") else None
+    except ValueError: return None
 def _recovery_available(task: dict) -> bool: return bool(task.get("recovery", {}).get("available"))
 def _preparation_failed(task: dict) -> bool: return task.get("preparation", {}).get("success") is False
 def is_recoverable_task(task: dict) -> bool: return _recovery_available(task) and task.get("status") != "DONE"
@@ -36,22 +42,18 @@ def record(root: Path, task_id: str, **values) -> dict:
     task.update(values); task["updated_at"]=_now(); registry_path(root).parent.mkdir(parents=True,exist_ok=True); registry_path(root).write_text(json.dumps(data,indent=2)+"\n")
     return task
 def next_task_id(root: Path) -> str:
-    numbers=[]; active=[]
-    for task_id, task in registry(root).get("tasks",{}).items():
-        try: numbers.append(int(task_id[5:]))
-        except ValueError: continue
-        task_file=destination_for(root,task_id)/".fame"/"tasks"/task_id/"TASK.json"
-        try: status=json.loads(task_file.read_text()).get("status",task.get("status"))
-        except (OSError,json.JSONDecodeError): status=task.get("status")
-        effective=dict(task); effective["status"]=status
-        if status != "DONE" and (status != "FAILED" or is_recoverable_task(effective)): active.append(task_id)
-    if active: return sorted(active)[0]
+    numbers=[]
+    for task_id in registry(root).get("tasks",{}):
+        number = _task_number(task_id)
+        if number is not None: numbers.append(number)
+    tasks_dir = root/".fame"/"tasks"
+    if tasks_dir.exists():
+        for path in tasks_dir.glob("FAME-*"):
+            number = _task_number(path.name)
+            if number is not None: numbers.append(number)
     for path in destination_for(root,"x").parent.glob("FAME-*"):
-        try:
-            number=int(path.name[5:]); numbers.append(number)
-            task=path/".fame"/"tasks"/path.name/"TASK.json"
-            if task.exists() and json.loads(task.read_text()).get("status") != "DONE": return path.name
-        except ValueError: pass
+        number = _task_number(path.name)
+        if number is not None: numbers.append(number)
     return f"FAME-{max(numbers,default=0)+1:04d}"
 def _git(root: Path, *args: str): return subprocess.run(["git",*args],cwd=root,text=True,capture_output=True,check=False)
 def _registered(root: Path, destination: Path) -> bool:
@@ -84,8 +86,35 @@ def record_preparation(root: Path, task_id: str, branch: str, worktree_path: Pat
     task = {"status": "FAILED" if not preparation.success else "PREPARED", "preparation": {"success": preparation.success, "results": preparation.results}}
     values = {"status": task["status"], "branch": branch, "worktree_path": str(worktree_path), "preparation": task["preparation"],
               "verification_state": "NOT_RUN", "recovery": {"available": True, "action": recovery_action(task)}}
-    if not preparation.success: values["failure_stage"] = "PREPARATION"
+    if not preparation.success:
+        environment = any(result.get("returncode") in (126, 127) or result.get("error_type") == "FileNotFoundError" for result in preparation.results)
+        values["failure_stage"] = "ENVIRONMENT" if environment else "PREPARATION"
     return record(root, task_id, **values)
+def update_task_artifact_status(workspace: Path, task_id: str, status: str, **extra) -> dict:
+    task_path = workspace/".fame"/"tasks"/task_id/"TASK.json"
+    task = _load_json(task_path)
+    task["status"] = status
+    task.update(extra)
+    task_path.write_text(json.dumps(task, indent=2) + "\n")
+    return task
+def inspect_task(root: Path, task_id: str) -> dict:
+    current = _registry_task(root, task_id)
+    workspace = Path(current.get("worktree_path") or destination_for(root, task_id))
+    artifact = _load_json(workspace/".fame"/"tasks"/task_id/"TASK.json")
+    status = artifact.get("status") or current.get("status") or ("MISSING" if not workspace.exists() else "UNKNOWN")
+    return {"task_id": task_id, "status": status, "workspace": str(workspace), "branch": current.get("branch") or branch_for(task_id),
+            "registry": current, "task": artifact, "recoverable": _recovery_available({**current, **artifact})}
+def close_task(root: Path, task_id: str, reason: str) -> dict:
+    info = inspect_task(root, task_id)
+    workspace = Path(info["workspace"])
+    if not info["registry"] and not info["task"]:
+        raise RuntimeError(f"unknown task: {task_id}")
+    closure = {"reason": reason, "closed_at": _now()}
+    if workspace.exists() and (workspace/".fame"/"tasks"/task_id/"TASK.json").exists():
+        update_task_artifact_status(workspace, task_id, "CLOSED", recovery={"available": False}, closure=closure)
+    return record(root, task_id, status="CLOSED", branch=info["branch"], worktree_path=str(workspace),
+                  recovery={"available": False, "action": ""}, closure=closure,
+                  verification_state=info["registry"].get("verification_state", "NOT_RUN"))
 def prepare_environment(worktree: Path, commands: list[str]):
     """Run only explicit project-owned setup in the isolated task worktree."""
     return run_commands(worktree, commands)

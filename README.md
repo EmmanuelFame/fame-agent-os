@@ -1,5 +1,11 @@
 # Fame Agent OS
 
+## v1.3.1
+
+Fame Agent OS v1.3.1 is the Quiet Workflow Hotfix. New requests always get a fresh monotonic task ID; failed, interrupted, and closed worktrees stay available for explicit recovery or closure, but they never hijack unrelated work. Production MCP flow now supports two-stage scope binding: provision first, bind real target paths, then verify against actual changed files.
+
+Built-in fallbacks now cover documentation paths and the Fame control plane itself, so `docs/...`, `.fame/...`, `.codex/...`, `.agents/...`, and `AGENTS.md` can be changed without accidentally invoking unrelated application checks. Environment and preparation failures remain recoverable, keep the live checkout untouched, and do not block unrelated new tasks.
+
 Fame is a portable Python CLI above Codex that optimizes verified engineering work per token. It routes work through abstract `architect`, `builder`, and `operator` roles, rather than permanently coupling policy to model names.
 
 Install once per machine with `uv tool install --editable .`, then run `fame init` in each Git project. For normal daily use, run `fame codex install --project` once and work in the Codex extension: Codex extension -> Fame MCP -> routed custom agent -> deterministic verification. Machine configuration lives in `~/.config/fame/config.json` (or `$XDG_CONFIG_HOME/fame`); portable project knowledge is in `.fame/`.
@@ -12,13 +18,13 @@ Graphify is optional navigation memory; source remains authoritative. Fame recor
 
 Run `fame codex install --project` from the repository. This installs the project-scoped `.codex/config.toml` MCP registration, `.agents/skills/fame/SKILL.md`, five role profiles under `.codex/agents/`, and the Fame-controlled `AGENTS.md` section. Run `fame codex status`, then reload the Codex extension. The terminal CLI remains available for CI, recovery, diagnostics, and headless fallback; it is not required for extension-native execution.
 
-The skill routes before broad exploration. The MCP server exposes deterministic `fame_route`, `fame_preflight`, `fame_prepare_task`, `fame_finish_task`, `fame_verify`, `fame_status`, `fame_doctor`, `fame_usage`, and `fame_recover` tools. Production preparation returns an exact persistent worktree path; the extension must make changes there, and humans merge or deploy manually. F5 work requires explicit human approval.
+The skill routes before broad exploration. The MCP server exposes deterministic `fame_route`, `fame_preflight`, `fame_prepare_task`, `fame_bind_task_scope`, `fame_finish_task`, `fame_resume_task`, `fame_close_task`, `fame_inspect_task`, `fame_verify`, `fame_status`, `fame_doctor`, `fame_usage`, and `fame_recover` tools. Production preparation returns an exact persistent worktree path; the extension must make changes there, and humans merge or deploy manually. F5 work requires explicit human approval.
 
 For local VS Code, initialize and install from the open repository. For VS Code Remote SSH, install Fame on the VPS, `cd` to the remote project, run `fame init --production`, configure `verification.commands`, then run `fame codex install --project` and reload the remote extension. A missing Codex CLI does not invalidate a healthy extension/MCP setup; `fame doctor` reports the two capabilities separately. See [Codex Extension Native mode](docs/CODEX.md).
 
 Large repositories still use one Fame root: configure named project scopes for deterministic path ownership, scoped checks, and isolated worktree preparation. Legacy repository-wide verification remains supported. See [Monorepo scopes](docs/MONOREPOS.md).
 
-Useful commands: `fame doctor`, `fame models`, `fame route "Change button label"`, `fame task "Add a CRUD endpoint" --dry-run`, `fame status`, `fame self-check`, and `fame usage`.
+Useful commands: `fame doctor`, `fame models`, `fame route "Change button label"`, `fame task "Add a CRUD endpoint" --dry-run`, `fame status`, `fame recover`, `fame inspect FAME-0007`, `fame resume FAME-0002`, `fame close FAME-0002 --reason "superseded"`, `fame self-check`, and `fame usage`.
 
 ## Context efficiency
 
